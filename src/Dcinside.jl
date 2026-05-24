@@ -340,13 +340,13 @@ end
 ```
 """
 function board(api::API, board_id::AbstractString;
-               num::Int=−1,
+               num::Int=-1,
                start_page::Int=1,
                recommend::Bool=false,
                document_id_upper_limit::Union{Int,Nothing}=nothing,
                document_id_lower_limit::Union{Int,Nothing}=nothing)::Channel{DocumentIndex}
 
-    Channel{DocumentIndex}(; csize=32) do ch
+    Channel{DocumentIndex}(32) do ch
         page      = start_page
         remaining = num
 
@@ -529,9 +529,9 @@ PC 갤러리의 JSON 댓글 API 를 사용한다.
 내부적으로 글 본문 페이지에서 `e_s_n_o` 와 `_GALLTYPE_` 를 취득한다.
 """
 function comments(api::API, board_id::AbstractString, document_id::AbstractString;
-                  num::Int=−1, start_page::Int=1)::Channel{Comment}
+                  num::Int=-1, start_page::Int=1)::Channel{Comment}
 
-    Channel{Comment}(; csize=32) do ch
+    Channel{Comment}(32) do ch
         # 글 본문에서 댓글 API 필수 파라미터 취득
         view_html = _get(_view_url(board_id, document_id))
         view_doc  = _parse_html(view_html)
