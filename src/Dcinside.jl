@@ -221,6 +221,40 @@ function _text(node; default::String="")::String
 end
 
 # ============================================================
+# Internal: gallery type detection
+# ============================================================
+
+# board_id → "mgallery" | "board" (캐시)
+const _gtype_cache = Dict{String,String}()
+
+"""
+`board_id` 가 마이너 갤러리면 `"mgallery"`, 일반 갤러리면 `"board"` 반환.
+결과는 세션 내에서 캐싱된다.
+"""
+function _gallery_type(board_id::AbstractString)::String
+    get!(_gtype_cache, string(board_id)) do
+        # m.dcinside.com 리다이렉트를 따라가면 gtype 을 알 수 있음
+        resp = HTTP.get("https://m.dcinside.com/board/$board_id";
+                        headers=GET_HEADERS, cookies=BASE_COOKIES, redirect=true)
+        url = string(resp.request.url)
+        occursin("mgallery", url) ? "mgallery" : "board"
+    end
+end
+
+"""게시판 목록 URL 생성."""
+function _list_url(board_id, page; recommend=false)
+    gtype = _gallery_type(board_id)
+    q     = recommend ? "&recommend=1" : ""
+    "https://gall.dcinside.com/$gtype/board/lists/?id=$board_id&page=$page$q"
+end
+
+"""글 본문 URL 생성."""
+function _view_url(board_id, document_id)
+    gtype = _gallery_type(board_id)
+    "https://gall.dcinside.com/$gtype/board/view/?id=$board_id&no=$document_id"
+end
+
+# ============================================================
 # Internal: time parsing  (Python __parse_time 대응)
 # ============================================================
 
@@ -351,24 +385,23 @@ function board(api::API, board_id::AbstractString;
         remaining = num
 
         while remaining != 0
-            q    = recommend ? "?recommend=1" : ""
-            url  = "https://m.dcinside.com/board/$board_id$q"
-            html = _get(url)
-            doc  = _parse_html(html)
+            url   = _list_url(board_id, page; recommend)
+            html  = _get(url)
+            doc   = _parse_html(html)
 
-            # 모바일 HTML: ul.gall-detail-lst > li[data-no]
+            # PC 갤러리: tbody.listwrap2 > tr.ub-content[data-no]
             # us-post 클래스가 있는 일반 글만 수집
-            rows = filter(_query(doc, "ul.gall-detail-lst > li")) do li
-                no  = _attr(li, "data-no")
-                cls = something(_attr(li, "class"), "")
+            rows = filter(_query(doc, "tbody.listwrap2 > tr.ub-content")) do tr
+                no  = _attr(tr, "data-no")
+                cls = something(_attr(tr, "class"), "")
                 no !== nothing && occursin("us-post", cls)
             end
 
             isempty(rows) && break
             found_any = false
 
-            for li in rows
-                document_id = something(_attr(li, "data-no"), "")
+            for tr in rows
+                document_id = something(_attr(tr, "data-no"), "")
                 isempty(document_id) && continue
 
                 doc_id_int = tryparse(Int, document_id)
@@ -380,41 +413,49 @@ function board(api::API, board_id::AbstractString;
                 end
 
                 # 말머리
-                subj_n  = _query1(li, ".gall-subject")
+                subj_n  = _query1(tr, "td.gall_subject > b")
                 subject = subj_n === nothing ? nothing : begin
                     t = _text(subj_n)
                     isempty(t) ? nothing : t
                 end
 
                 # 제목
-                title_n = _query1(li, ".gall-detail-tit a")
+                title_n = _query1(tr, "td.gall_tit b")
                 title   = title_n === nothing ? "" : _text(title_n)
 
                 # 이미지 아이콘
-                has_image       = !isempty(_query(li, ".icon-img"))
+                has_image       = !isempty(_query(tr, "td.gall_tit em.icon_img"))
                 image_available = has_image
 
-                # 작성자
-                nick_n = _query1(li, ".gall-detail-nick em")
-                author = nick_n === nothing ? "" : _text(nick_n)
+                # 작성자: data-nick + data-uid/data-ip
+                writer_td = _query1(tr, "td.gall_writer")
+                author = ""
+                if writer_td !== nothing
+                    nick = something(_attr(writer_td, "data-nick"), "")
+                    ip   = something(_attr(writer_td, "data-ip"),   "")
+                    author = isempty(ip) ? nick : "$nick($ip)"
+                end
 
-                # 날짜
-                date_n    = _query1(li, ".gall-detail-date")
-                time_str  = date_n === nothing ? "00:00" : _text(date_n)
+                # 날짜: td.gall_date[title] 에 전체 날짜 있음
+                date_td  = _query1(tr, "td.gall_date")
+                time_str = date_td === nothing ? "00:00" : begin
+                    full = something(_attr(date_td, "title"), "")
+                    isempty(full) ? _text(date_td) : full
+                end
                 post_time = try _parse_time(time_str) catch; now() end
 
                 # 조회수
-                view_n     = _query1(li, ".gall-detail-hits")
-                view_count = view_n === nothing ? 0 :
-                    something(tryparse(Int, _text(view_n)), 0)
+                view_td    = _query1(tr, "td.gall_count")
+                view_count = view_td === nothing ? 0 :
+                    something(tryparse(Int, strip(_text(view_td))), 0)
 
                 # 추천수
-                recom_n      = _query1(li, ".gall-detail-recommend")
-                voteup_count = recom_n === nothing ? 0 :
-                    something(tryparse(Int, _text(recom_n)), 0)
+                recom_td     = _query1(tr, "td.gall_recommend")
+                voteup_count = recom_td === nothing ? 0 :
+                    something(tryparse(Int, strip(_text(recom_td))), 0)
 
-                # 댓글수
-                reply_n       = _query1(li, ".gall-detail-reply")
+                # 댓글수: span.reply_num 텍스트 "[N]" 또는 "[N/M]"
+                reply_n       = _query1(tr, "span.reply_num")
                 comment_count = 0
                 if reply_n !== nothing
                     digits = filter(isdigit, _text(reply_n))
@@ -445,37 +486,40 @@ end
 게시글 상세 내용 반환. 파싱 실패 시 `nothing`.
 """
 function document(api::API, board_id::AbstractString, document_id::AbstractString)::Union{Document,Nothing}
-    url  = "https://m.dcinside.com/board/$board_id/$document_id"
+    url  = _view_url(board_id, document_id)
     html = _get(url)
     doc  = _parse_html(html)
 
-    # 모바일 HTML: div.view-content
-    head = _query1(doc, "div.view-content")
+    # PC 갤러리: div.gallview_head.ub-content
+    head = _query1(doc, "div.gallview_head")
     head === nothing && return nothing
 
-    body_node = _query1(doc, "div.thum-txt")
+    # 본문 div
+    body_node = _query1(doc, "div.writing_view_box")
     body_node === nothing && return nothing
 
     # 제목
-    title_n = _query1(head, "h3.title span.tit")
+    title_n = _query1(head, "h3.title span.title_subject")
     title   = title_n === nothing ? "" : _text(title_n)
 
     # 작성자
-    writer_n  = _query1(head, "div.gall-detail-info")
+    writer_n  = _query1(head, "div.gall_writer")
     author    = ""
     author_id = nothing
     if writer_n !== nothing
-        nick  = _text(_query1(writer_n, "em.nick") !== nothing ?
-                      _query1(writer_n, "em.nick") : writer_n)
-        ip    = something(_attr(writer_n, "data-ip"), "")
+        nick  = something(_attr(writer_n, "data-nick"), "")
+        uid   = something(_attr(writer_n, "data-uid"),  "")
+        ip    = something(_attr(writer_n, "data-ip"),   "")
         author    = isempty(ip) ? nick : "$nick($ip)"
-        uid       = something(_attr(writer_n, "data-uid"), "")
         author_id = isempty(uid) ? nothing : uid
     end
 
-    # 시각
-    date_n   = _query1(head, "span.gall-date")
-    time_str = date_n === nothing ? "00:00" : _text(date_n)
+    # 시각: span.gall_date[title]
+    date_n   = _query1(head, "span.gall_date")
+    time_str = date_n === nothing ? "00:00" : begin
+        full = something(_attr(date_n, "title"), "")
+        isempty(full) ? strip(_text(date_n)) : full
+    end
     post_time = try _parse_time(time_str) catch; now() end
 
     # 본문: body_node 에서 Lexbor.Node 로 변환 후 순회
@@ -484,7 +528,7 @@ function document(api::API, board_id::AbstractString, document_id::AbstractStrin
 
     # 이미지
     images = Image[]
-    for img in _query(doc, "div.thum-txt img")
+    for img in _query(doc, "div.writing_view_box img")
         src_orig = _attr(img, "data-original")
         src_fall = _attr(img, "src")
         src      = something(src_orig, src_fall)
@@ -496,16 +540,23 @@ function document(api::API, board_id::AbstractString, document_id::AbstractStrin
         push!(images, Image(src, document_id, board_id))
     end
 
-    # 조회수
-    view_n     = _query1(head, "span.gall-detail-hits")
-    view_count = view_n === nothing ? 0 :
-        something(tryparse(Int, filter(isdigit, _text(view_n))), 0)
+    # 조회수: span.gall_count "조회 N"
+    view_n     = _query1(head, "span.gall_count")
+    view_count = 0
+    if view_n !== nothing
+        vs = split(_text(view_n))
+        !isempty(vs) && (view_count = something(tryparse(Int, vs[end]), 0))
+    end
 
-    # 추천수
-    vote_n = _query1(head, "span.gall-detail-recommend")
-    voteup = vote_n === nothing ? 0 :
-        something(tryparse(Int, filter(isdigit, _text(vote_n))), 0)
+    # 추천수: span.gall_reply_num "추천 N"
+    vote_n   = _query1(head, "span.gall_reply_num")
+    voteup   = 0
+    if vote_n !== nothing
+        vs = split(_text(vote_n))
+        !isempty(vs) && (voteup = something(tryparse(Int, vs[end]), 0))
+    end
 
+    # votedown / logined_voteup: PC 갤러리에서는 별도 엔드포인트 (0 으로 초기화)
     votedown = 0
     logined  = 0
     html_str = _text(bnode)
