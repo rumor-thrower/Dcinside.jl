@@ -241,17 +241,28 @@ function _gallery_type(board_id::AbstractString)::String
     end
 end
 
-"""게시판 목록 URL 생성."""
+"""게시판 목록 URL 생성.
+- major : `gall.dcinside.com/board/lists/?id=...`
+- minor : `gall.dcinside.com/mgallery/board/lists/?id=...`
+"""
 function _list_url(board_id, page; recommend=false)
-    gtype = _gallery_type(board_id)
+    gtype = _gallery_type(board_id)   # "mgallery" | "board"
     q     = recommend ? "&recommend=1" : ""
-    "https://gall.dcinside.com/$gtype/board/lists/?id=$board_id&page=$page$q"
+    if gtype == "mgallery"
+        "https://gall.dcinside.com/mgallery/board/lists/?id=$board_id&page=$page$q"
+    else
+        "https://gall.dcinside.com/board/lists/?id=$board_id&page=$page$q"
+    end
 end
 
 """글 본문 URL 생성."""
 function _view_url(board_id, document_id)
     gtype = _gallery_type(board_id)
-    "https://gall.dcinside.com/$gtype/board/view/?id=$board_id&no=$document_id"
+    if gtype == "mgallery"
+        "https://gall.dcinside.com/mgallery/board/view/?id=$board_id&no=$document_id"
+    else
+        "https://gall.dcinside.com/board/view/?id=$board_id&no=$document_id"
+    end
 end
 
 # ============================================================
