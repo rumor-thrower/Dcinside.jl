@@ -408,11 +408,13 @@ function board(api::API, board_id::AbstractString;
             doc   = _parse_html(html)
 
             # PC 갤러리: tbody.listwrap2 > tr.ub-content[data-no]
-            # us-post 클래스가 있는 일반 글만 수집
+            # 공지(icon_notice) · 설문(icon_survey) · 광고(data-no 없음) 제외
             rows = filter(_query(doc, "tbody.listwrap2 > tr.ub-content")) do tr
-                no  = _attr(tr, "data-no")
-                cls = something(_attr(tr, "class"), "")
-                no !== nothing && occursin("us-post", cls)
+                no    = _attr(tr, "data-no")
+                dtype = something(_attr(tr, "data-type"), "")
+                no !== nothing &&
+                !occursin("icon_notice", dtype) &&
+                !occursin("icon_survey", dtype)
             end
 
             isempty(rows) && break
