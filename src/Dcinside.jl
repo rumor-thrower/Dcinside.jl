@@ -540,9 +540,8 @@ function document(api::API, board_id::AbstractString, document_id::AbstractStrin
     end
     post_time = try _parse_time(time_str) catch; now() end
 
-    # 본문: body_node 에서 Lexbor.Node 로 변환 후 순회
-    bnode    = Lexbor.Node(body_node)
-    contents = strip(_innertext(bnode; sep=" "))
+    # 본문: body_node 를 직접 순회 (Lexbor.Node(node) 생성자는 Document 전용)
+    contents = strip(_innertext(body_node; sep=" "))
 
     # 이미지
     images = Image[]
@@ -577,7 +576,7 @@ function document(api::API, board_id::AbstractString, document_id::AbstractStrin
     # votedown / logined_voteup: PC 갤러리에서는 별도 엔드포인트 (0 으로 초기화)
     votedown = 0
     logined  = 0
-    html_str = _innertext(bnode; sep=" ")
+    html_str = _innertext(body_node)
 
     Document(
         document_id, board_id, title, author, author_id,
