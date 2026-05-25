@@ -193,7 +193,7 @@ end
 서버가 빈 HTML(Content-Length: 0)을 반환하는 경우 `delay` 초씩 기다리며
 최대 `retries` 회 재시도한다. 모든 시도 후에도 빈 응답이면 빈 문자열 반환.
 """
-function _get_retry(url::AbstractString; retries::Int=3, delay::Float64=2.0, kwargs...)::String
+function _get_retry(url::AbstractString; retries::Int=3, delay::Float64=5.0, kwargs...)::String
     for attempt in 1:retries
         html = try _get(url; kwargs...) catch; "" end
         !isempty(html) && return html
@@ -206,6 +206,7 @@ end
 function _get_with_url(url::AbstractString;
                        headers = GET_HEADERS,
                        cookies::Dict{String,String} = BASE_COOKIES)::Tuple{String,String}
+    _throttle()
     resp = HTTP.get(url; headers, cookies, redirect=true)
     body    = String(resp.body)
     final_url = string(resp.request.url)
@@ -268,6 +269,7 @@ const _gtype_cache = Dict{String,String}()
 function _gallery_type(board_id::AbstractString)::String
     get!(_gtype_cache, string(board_id)) do
         # m.dcinside.com 리다이렉트를 따라가면 gtype 을 알 수 있음
+        _throttle()
         resp = HTTP.get("https://m.dcinside.com/board/$board_id";
                         headers=GET_HEADERS, cookies=BASE_COOKIES, redirect=true)
         url = string(resp.request.url)
