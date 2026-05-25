@@ -124,14 +124,21 @@ const api = Dcinside.API()
 # ╔═╡ c708a4f0-2482-4d84-94f7-cc734cc1a5c0
 const gallery_name = "genrenovel"
 
-# ╔═╡ a31efb28-a068-471c-af22-1d670b0b01ce
-let ch = Dcinside.board(api, gallery_name; num=1)
-	df = DcinsideDataFrames.to_dataframe(ch)
-end
+# ╔═╡ fa9b0c1e-3d72-4a85-b6e8-2f5c8d1e0a34
+trigger = Kiwi.load_user_dict!(joinpath(@__DIR__, "user_dict.dict"))
 
 # ╔═╡ 9c9e951d-b26f-4469-a34e-befce57a9338
 let ch = Dcinside.board(api, gallery_name; num=5)
 	df = DcinsideDataFrames.to_dataframe(ch)
+end
+
+# ╔═╡ c1a2b3d4-e5f6-7890-abcd-ef1234567890
+# title 열 → Kiwi 형태소 분석 (명사 추출) → id·title·morphemes 열만 출력
+let trigger
+	ch = Dcinside.board(api, gallery_name; num=10)
+	df = DcinsideDataFrames.to_dataframe(ch)
+	DcinsideDataFrames.parse_titles!(df, Kiwi.nouns)
+	df[!, [:id, :title, :morphemes]]
 end
 
 # ╔═╡ Cell order:
@@ -141,5 +148,6 @@ end
 # ╟─d32c25d4-960c-475d-8c55-5daa238e2a8c
 # ╠═d9be15e6-11d4-4e56-af91-99a60befe7ef
 # ╠═c708a4f0-2482-4d84-94f7-cc734cc1a5c0
-# ╠═a31efb28-a068-471c-af22-1d670b0b01ce
+# ╠═fa9b0c1e-3d72-4a85-b6e8-2f5c8d1e0a34
 # ╠═9c9e951d-b26f-4469-a34e-befce57a9338
+# ╠═c1a2b3d4-e5f6-7890-abcd-ef1234567890
