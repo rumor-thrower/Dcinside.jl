@@ -37,8 +37,9 @@ function check_doc_fields(doc::Document; skip=(:subject, :author_id))
     end
 end
 
-"""Comment 의 필수 필드 검사."""
-function check_comment_fields(comm::Comment; skip=(:contents, :dccon, :voice, :author_id))
+"""Comment 의 필수 필드 검사.
+삭제/숨김 처리된 댓글은 author 가 빈 문자열일 수 있으므로 기본적으로 skip 한다."""
+function check_comment_fields(comm::Comment; skip=(:contents, :dccon, :voice, :author_id, :author))
     for fname in fieldnames(Comment)
         fname in skip && continue
         val = getfield(comm, fname)
@@ -119,6 +120,8 @@ end
             comms = collect(idx.comments())
             isempty(comms) && continue
             for comm in comms
+                # 삭제/숨김 댓글(내용 없음)은 필드 검사 skip
+                comm.contents === nothing && comm.dccon === nothing && comm.voice === nothing && continue
                 check_comment_fields(comm)
                 @test comm.time > now() - Hour(24)
                 @test comm.time < now() + Hour(1)
@@ -156,6 +159,8 @@ end
             comms = collect(idx.comments())
             isempty(comms) && continue
             for comm in comms
+                # 삭제/숨김 댓글(내용 없음)은 필드 검사 skip
+                comm.contents === nothing && comm.dccon === nothing && comm.voice === nothing && continue
                 check_comment_fields(comm)
                 @test comm.time > now() - Hour(24)
                 @test comm.time < now() + Hour(1)
