@@ -525,56 +525,82 @@ end
 
 댓글 목록을 `Channel` (lazy) 로 반환.
 
-모바일 HTML 에서 댓글 목록을 직접 파싱한다.
+PC 갤러리의 JSON 댓글 API 를 사용한다.
+내부적으로 글 본문 페이지에서 `e_s_n_o` 와 `_GALLTYPE_` 를 취득한다.
 """
 function comments(api::API, board_id::AbstractString, document_id::AbstractString;
                   num::Int=−1, start_page::Int=1)::Channel{Comment}
 
     Channel{Comment}(; csize=32) do ch
+        # 글 본문에서 댓글 API 필수 파라미터 취득
+        view_html = _get(_view_url(board_id, document_id))
+        view_doc  = _parse_html(view_html)
+
+        esnon  = _query1(view_doc, "#e_s_n_o")
+        gtype_ = _query1(view_doc, "#GALLTYPE_")
+        e_s_n_o   = esnon  !== nothing ? something(_attr(esnon,  "value"), "") : ""
+        galltype  = gtype_ !== nothing ? something(_attr(gtype_, "value"), "G") : "G"
+
+        url       = "https://gall.dcinside.com/board/comment/"
         remaining = num
 
         for page in start_page:999_999
-            url      = "https://m.dcinside.com/board/$board_id/$document_id?comment_page=$page"
-            html     = _get(url)
-            doc      = _parse_html(html)
-            clist    = _query(doc, "div.comment-item")
-            isempty(clist) && break
+            payload = [
+                "id"           => board_id,
+                "no"           => document_id,
+                "cmt_id"       => board_id,
+                "cmt_no"       => document_id,
+                "e_s_n_o"      => e_s_n_o,
+                "comment_page" => string(page),
+                "sort"         => "D",
+                "_GALLTYPE_"   => galltype,
+            ]
+            resp_str = _post(url, payload)
+            data     = try JSON.parse(resp_str)
+                       catch; break end
+
+            clist = get(data, "comments", nothing)
+            (clist === nothing || isempty(clist)) && break
             found_any = false
 
             for c in clist
-                id = something(_attr(c, "data-no"), "")
-
-                # 대댓글 여부: div.comment-item.re
-                cls      = something(_attr(c, "class"), "")
-                is_reply = occursin(" re", cls)
+                id       = string(get(c, "no", ""))
+                depth    = get(c, "depth", 0)
+                is_reply = depth > 0
 
                 # 작성자
-                nick_n    = _query1(c, "em.nick")
-                nick      = nick_n === nothing ? "" : _text(nick_n)
-                ip_n      = _query1(c, "em.ip")
-                ip        = ip_n === nothing ? "" : strip(_text(ip_n), ['(', ')'])
-                uid_n     = _query1(c, "input[name='user_id']")
-                uid       = uid_n === nothing ? "" : something(_attr(uid_n, "value"), "")
-                author    = isempty(ip) ? nick : "$nick($ip)"
+                name  = string(get(c, "name", ""))
+                uid   = string(get(c, "user_id", ""))
+                ip    = string(get(c, "ip", ""))
+                author    = isempty(ip) ? name : "$name($ip)"
                 author_id = isempty(uid) ? nothing : uid
 
-                # 내용
-                memo_n   = _query1(c, "p.usertxt")
-                contents = memo_n === nothing ? nothing : begin
-                    t = _text(memo_n)
-                    isempty(t) ? nothing : t
+                # 내용: HTML 포함 가능 → 텍스트 추출
+                memo_raw = get(c, "memo", nothing)
+                if memo_raw === nothing
+                    contents = nothing
+                else
+                    memo_str = string(memo_raw)
+                    if occursin("<", memo_str)
+                        # HTML 포함 → Lexbor 로 텍스트 추출
+                        memo_doc  = _parse_html(memo_str)
+                        memo_root = Lexbor.Node(memo_doc)
+                        memo_text = strip(_innertext(memo_root; sep=" "))
+                        contents  = isempty(memo_text) ? nothing : memo_text
+                    else
+                        contents = isempty(strip(memo_str)) ? nothing : strip(memo_str)
+                    end
                 end
 
                 # dccon (이미지 댓글)
-                dccon_n = _query1(c, "img.written_dccon")
-                dccon   = dccon_n === nothing ? nothing : _attr(dccon_n, "src")
-
+                dccon = nothing
                 voice = nothing
+                voice_raw = get(c, "voice", nothing)
+                voice_raw !== nothing && !isempty(string(voice_raw)) && (voice = string(voice_raw))
 
                 # 시각
-                date_n    = _query1(c, "span.date-time")
-                time_str  = date_n === nothing ? "00:00" : _text(date_n)
-                post_time = try _parse_time(time_str) catch; now() end
+                reg_date  = string(get(c, "reg_date", "00:00"))
+                post_time = try _parse_time(reg_date) catch; now() end
 
                 put!(ch, Comment(id, is_reply, author, author_id, contents, dccon, voice, post_time))
                 found_any  = true
@@ -583,6 +609,10 @@ function comments(api::API, board_id::AbstractString, document_id::AbstractStrin
             end
 
             found_any || break
+
+            # 전체 댓글 수 확인으로 마지막 페이지 판단
+            total_cnt = get(data, "total_cnt", 0)
+            page * 20 >= total_cnt && break
         end
     end
 end
