@@ -50,16 +50,12 @@ const gallery_name = "genrenovel"
 
 # ╔═╡ a31efb28-a068-471c-af22-1d670b0b01ce
 let ch = Dcinside.board(api, gallery_name; num=1)
-	idx = take!(ch)
-	@info fieldnames(Dcinside.DocumentIndex)
-	@info idx
+	df = DcinsideDataFrames.to_dataframe(ch)
 end
 
 # ╔═╡ 9c9e951d-b26f-4469-a34e-befce57a9338
 let ch = Dcinside.board(api, gallery_name; num=5)
-	for idx in ch
-		@show idx
-	end
+	df = DcinsideDataFrames.to_dataframe(ch)
 end
 
 # ╔═╡ Cell order:
