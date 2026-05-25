@@ -437,9 +437,25 @@ function board(api::API, board_id::AbstractString;
                     isempty(t) ? nothing : t
                 end
 
-                # 제목
-                title_n = _query1(tr, "td.gall_tit b")
-                title   = title_n === nothing ? "" : _innertext(title_n; sep=" ")
+                # 제목: <b> 가 있으면 그 텍스트, 없으면 링크 <a> 전체 텍스트
+                # (일부 일반 글은 <b> 없이 <a> 안 텍스트 노드로 직접 존재)
+                title_b  = _query1(tr, "td.gall_tit b")
+                title_a  = _query1(tr, "td.gall_tit a:not(.reply_numbox)")
+                title    = if title_b !== nothing
+                    _innertext(title_b; sep=" ")
+                elseif title_a !== nothing
+                    parts = String[]
+                    for n in PreOrderDFS(title_a)
+                        Lexbor.is_text(n) || continue
+                        t = Lexbor.text(n)
+                        isnothing(t) && continue
+                        ts = strip(t)
+                        isempty(ts) || push!(parts, ts)
+                    end
+                    join(parts, " ")
+                else
+                    ""
+                end
 
                 # 이미지 아이콘
                 has_image       = !isempty(_query(tr, "td.gall_tit em.icon_img"))
