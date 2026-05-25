@@ -46,6 +46,16 @@ const BASE_COOKIES = Dict{String,String}(
     "_ga" => "GA1.2.693521455.1588839880",
 )
 
+# ── 전역 요청 스로틀 (Dcinside rate-limit 방지) ─────────────
+const _last_request_time = Ref(0.0)
+const _REQUEST_MIN_INTERVAL = 1.5  # 요청 사이 최소 간�� (초)
+
+function _throttle()
+    elapsed = time() - _last_request_time[]
+    elapsed < _REQUEST_MIN_INTERVAL && sleep(_REQUEST_MIN_INTERVAL - elapsed)
+    _last_request_time[] = time()
+end
+
 # ============================================================
 # URL encoding helpers  (Python의 quote / unquote 대응)
 # ============================================================
@@ -172,8 +182,24 @@ function _get(url::AbstractString;
               headers = GET_HEADERS,
               cookies::Dict{String,String} = BASE_COOKIES,
               redirect::Bool = true)::String
+    _throttle()
     resp = HTTP.get(url; headers, cookies, redirect)
     String(resp.body)
+end
+
+"""
+    _get_retry(url; retries=3, delay=2.0, kwargs...) -> String
+
+서버가 빈 HTML(Content-Length: 0)을 반환하는 경우 `delay` 초씩 기다리며
+최대 `retries` 회 재시도한다. 모든 시도 후에도 빈 응답이면 빈 문자열 반환.
+"""
+function _get_retry(url::AbstractString; retries::Int=3, delay::Float64=2.0, kwargs...)::String
+    for attempt in 1:retries
+        html = try _get(url; kwargs...) catch; "" end
+        !isempty(html) && return html
+        attempt < retries && sleep(delay)
+    end
+    return ""
 end
 
 # 최종 리다이렉트 URL 도 함께 반환
@@ -190,6 +216,7 @@ function _post(url::AbstractString,
                payload;                          # Pairs 또는 Dict
                headers = XML_HTTP_REQ_HEADERS,
                cookies::Dict{String,String} = BASE_COOKIES)::String
+    _throttle()
     pairs = payload isa Dict ? collect(payload) : payload
     body  = HTTP.URIs.escapeuri(pairs)
     resp  = HTTP.post(url; headers, cookies, body)
@@ -404,7 +431,8 @@ function board(api::API, board_id::AbstractString;
 
         while remaining != 0
             url   = _list_url(board_id, page; recommend)
-            html  = _get(url)
+            html  = _get_retry(url)
+            isempty(html) && break
             doc   = _parse_html(html)
 
             # PC 갤러리: tbody.listwrap2 > tr.ub-content[data-no]
@@ -523,7 +551,8 @@ end
 """
 function document(api::API, board_id::AbstractString, document_id::AbstractString)::Union{Document,Nothing}
     url  = _view_url(board_id, document_id)
-    html = _get(url)
+    html = _get_retry(url)
+    isempty(html) && return nothing
     doc  = _parse_html(html)
 
     # PC 갤러리: div.gallview_head.ub-content
@@ -619,7 +648,8 @@ function comments(api::API, board_id::AbstractString, document_id::AbstractStrin
 
     Channel{Comment}(32) do ch
         # 글 본문에서 댓글 API 필수 파라미터 취득
-        view_html = _get(_view_url(board_id, document_id))
+        view_html = _get_retry(_view_url(board_id, document_id))
+        isempty(view_html) && return
         view_doc  = _parse_html(view_html)
 
         esnon  = _query1(view_doc, "#e_s_n_o")
