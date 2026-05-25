@@ -15,10 +15,10 @@ function check_index_fields(idx::DocumentIndex; skip=(:subject,))
         fname in skip && continue
         val = getfield(idx, fname)
         if val isa Function
-            @test val isa Function "$(fname) is callable"
+            @testset "$fname is callable" begin @test val isa Function end
         else
-            @test !isnothing(val) "$(fname) not nothing"
-            @test string(val) != "" "$(fname) not empty"
+            @testset "$fname not nothing" begin @test !isnothing(val) end
+            @testset "$fname not empty"   begin @test string(val) != "" end
         end
     end
 end
@@ -29,10 +29,10 @@ function check_doc_fields(doc::Document; skip=(:subject, :author_id))
         fname in skip && continue
         val = getfield(doc, fname)
         if val isa Function
-            @test val isa Function "$(fname) is callable"
+            @testset "$fname is callable" begin @test val isa Function end
         else
-            @test !isnothing(val) "$(fname) not nothing"
-            @test string(val) != "" "$(fname) not empty"
+            @testset "$fname not nothing" begin @test !isnothing(val) end
+            @testset "$fname not empty"   begin @test string(val) != "" end
         end
     end
 end
@@ -42,8 +42,8 @@ function check_comment_fields(comm::Comment; skip=(:contents, :dccon, :voice, :a
     for fname in fieldnames(Comment)
         fname in skip && continue
         val = getfield(comm, fname)
-        @test !isnothing(val) "$(fname) not nothing"
-        @test string(val) != "" "$(fname) not empty"
+        @testset "$fname not nothing" begin @test !isnothing(val) end
+        @testset "$fname not empty"   begin @test string(val) != "" end
     end
     # contents / dccon / voice 중 최소 하나는 있어야 함
     @test !isnothing(something(comm.contents, comm.dccon, comm.voice, nothing))
