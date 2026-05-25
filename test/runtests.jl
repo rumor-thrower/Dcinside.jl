@@ -63,21 +63,23 @@ end
     end
 
     # ── 2. 마이너 갤러리 글 1개 읽기 ────────────────────────
+    # 마이너 갤러리는 트래픽이 낮을 수 있으므로 24시간 허용
     @testset "마이너 갤러리(aoegame) 글 1개 읽기" begin
         ch  = board(api, "aoegame"; num=1)
         idx = take!(ch)
 
         check_index_fields(idx)
-        @test idx.time > now() - Hour(1)
+        @test idx.time > now() - Hour(24)
         @test idx.time < now() + Hour(1)
     end
 
     # ── 3. 마이너 갤러리 글 201개 읽기 ──────────────────────
+    # 여러 페이지에 걸쳐 가져오므로 시간 조건은 완화(30일) — 페이지네이션 동작 검증이 목적
     @testset "마이너 갤러리(aoegame) 글 201개 읽기" begin
         cnt = 0
         for idx in board(api, "aoegame"; num=201)
             check_index_fields(idx)
-            @test idx.time > now() - Hour(24)
+            @test idx.time > now() - Day(30)
             @test idx.time < now() + Hour(1)
             cnt += 1
         end
@@ -118,7 +120,7 @@ end
             isempty(comms) && continue
             for comm in comms
                 check_comment_fields(comm)
-                @test comm.time > now() - Hour(1)
+                @test comm.time > now() - Hour(24)
                 @test comm.time < now() + Hour(1)
             end
             break
@@ -136,11 +138,12 @@ end
     end
 
     # ── 7. 메이저 갤러리 글 201개 읽기 ─────────────────────
+    # 여러 페이지에 걸쳐 가져오므로 시간 조건은 완화(30일) — 페이지네이션 동작 검증이 목적
     @testset "프로그래밍 갤러리 글 201개 읽기" begin
         count = 0
         for idx in board(api, "programming"; num=201)
             check_index_fields(idx)
-            @test idx.time > now() - Hour(24)
+            @test idx.time > now() - Day(30)
             @test idx.time < now() + Hour(1)
             count += 1
         end
@@ -170,7 +173,7 @@ end
         @test !isnothing(doc)
         if !isnothing(doc)
             check_doc_fields(doc)
-            @test doc.time > now() - Hour(1)
+            @test doc.time > now() - Hour(24)
             @test doc.time < now() + Hour(1)
         end
     end
@@ -183,6 +186,7 @@ end
 
         @test !isnothing(doc)
         if !isnothing(doc)
+            # author_id 는 비로그인 글에서 없을 수 있으므로 skip
             check_doc_fields(doc; skip=(:subject, :author_id))
             @test doc.time > now() - Hour(1)
             @test doc.time < now() + Hour(1)
