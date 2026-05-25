@@ -92,26 +92,28 @@ end
         comms = collect(comments(api, "programming", "1847628"))
         @test length(comms) >= 5
 
-        c1, c2, c3, c4, c5 = comms[1:5]
+        if length(comms) >= 5
+            c1, c2, c3, c4, c5 = comms[1:5]
 
-        @test c1.author   == "ㅇㅇ(112.172)"
-        @test c1.contents == "뭐하러일함  - dc App"
-        @test !c1.is_reply
-        @test c1.time     == DateTime(2021, 8, 21, 12, 28, 8)
+            @test c1.author   == "ㅇㅇ(112.172)"
+            @test c1.contents == "뭐하러일함  - dc App"
+            @test !c1.is_reply
+            @test c1.time     == DateTime(2021, 8, 21, 12, 28, 8)
 
-        @test c2.author   == "ㅇㅇ(39.121)"
-        @test !c2.is_reply
-        @test c2.time     == DateTime(2021, 8, 21, 12, 32, 11)
+            @test c2.author   == "ㅇㅇ(39.121)"
+            @test !c2.is_reply
+            @test c2.time     == DateTime(2021, 8, 21, 12, 32, 11)
 
-        @test c3.is_reply
-        @test c3.time     == DateTime(2021, 8, 21, 12, 40, 32)
+            @test c3.is_reply
+            @test c3.time     == DateTime(2021, 8, 21, 12, 40, 32)
 
-        @test c4.is_reply
-        @test c4.time     == DateTime(2021, 8, 21, 12, 42, 28)
+            @test c4.is_reply
+            @test c4.time     == DateTime(2021, 8, 21, 12, 42, 28)
 
-        @test c5.author   == "ㅇㅇ(202.150)"
-        @test !c5.is_reply
-        @test c5.time     == DateTime(2021, 8, 21, 12, 45, 7)
+            @test c5.author   == "ㅇㅇ(202.150)"
+            @test !c5.is_reply
+            @test c5.time     == DateTime(2021, 8, 21, 12, 45, 7)
+        end
     end
 
     # ── 5. 마이너 갤러리 최신 글 댓글 검사 ─────────────────
