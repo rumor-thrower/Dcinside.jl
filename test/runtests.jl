@@ -46,7 +46,7 @@ function check_comment_fields(comm::Comment; skip=(:contents, :dccon, :voice, :a
         @testset "$fname not empty"   begin @test string(val) != "" end
     end
     # contents / dccon / voice 중 최소 하나는 있어야 함
-    @test !isnothing(something(comm.contents, comm.dccon, comm.voice, nothing))
+    @test (comm.contents !== nothing) || (comm.dccon !== nothing) || (comm.voice !== nothing)
 end
 
 # ────────────────────────────────────────────────────────────
