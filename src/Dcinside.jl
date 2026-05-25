@@ -214,10 +214,17 @@ function _attr(node::Lexbor.Node, name::AbstractString)
     isnothing(attrs) ? nothing : get(attrs, name, nothing)
 end
 
-"""텍스트 노드의 텍스트를 반환. 엘리먼트 노드에는 `nothing` 반환."""
-function _text(node; default::String="")::String
-    t = Lexbor.text(node)
-    isnothing(t) ? default : strip(string(t))
+"""全 텍스트 노드를 sep 으로 이어 붙임 (lxml `itertext()` 대응)."""
+function _innertext(node::Lexbor.Node; sep::AbstractString="\n")::String
+    parts = String[]
+    for n in PreOrderDFS(node)
+        Lexbor.is_text(n) || continue
+        t = Lexbor.text(n)
+        isnothing(t) && continue
+        ts = strip(t)
+        isempty(ts) || push!(parts, ts)
+    end
+    join(parts, sep)
 end
 
 # ============================================================
@@ -354,7 +361,7 @@ function gallery(::API; name::Union{AbstractString,Nothing}=nothing)::Dict{Strin
     doc    = _parse_html(html)
     result = Dict{String,String}()
     for a in _query(doc, "#total_1 a")
-        board_name = _text(a)
+        board_name = _innertext(a; sep=" ")
         href       = something(_attr(a, "href"), "")
         board_id   = split(href, "/")[end]
         if name === nothing || contains(board_name, name)
@@ -426,13 +433,13 @@ function board(api::API, board_id::AbstractString;
                 # 말머리
                 subj_n  = _query1(tr, "td.gall_subject > b")
                 subject = subj_n === nothing ? nothing : begin
-                    t = _text(subj_n)
+                    t = _innertext(subj_n; sep=" ")
                     isempty(t) ? nothing : t
                 end
 
                 # 제목
                 title_n = _query1(tr, "td.gall_tit b")
-                title   = title_n === nothing ? "" : _text(title_n)
+                title   = title_n === nothing ? "" : _innertext(title_n; sep=" ")
 
                 # 이미지 아이콘
                 has_image       = !isempty(_query(tr, "td.gall_tit em.icon_img"))
@@ -451,25 +458,25 @@ function board(api::API, board_id::AbstractString;
                 date_td  = _query1(tr, "td.gall_date")
                 time_str = date_td === nothing ? "00:00" : begin
                     full = something(_attr(date_td, "title"), "")
-                    isempty(full) ? _text(date_td) : full
+                    isempty(full) ? _innertext(date_td; sep=" ") : full
                 end
                 post_time = try _parse_time(time_str) catch; now() end
 
                 # 조회수
                 view_td    = _query1(tr, "td.gall_count")
                 view_count = view_td === nothing ? 0 :
-                    something(tryparse(Int, strip(_text(view_td))), 0)
+                    something(tryparse(Int, strip(_innertext(view_td; sep=" "))), 0)
 
                 # 추천수
                 recom_td     = _query1(tr, "td.gall_recommend")
                 voteup_count = recom_td === nothing ? 0 :
-                    something(tryparse(Int, strip(_text(recom_td))), 0)
+                    something(tryparse(Int, strip(_innertext(recom_td; sep=" "))), 0)
 
                 # 댓글수: span.reply_num 텍스트 "[N]" 또는 "[N/M]"
                 reply_n       = _query1(tr, "span.reply_num")
                 comment_count = 0
                 if reply_n !== nothing
-                    digits = filter(isdigit, _text(reply_n))
+                    digits = filter(isdigit, _innertext(reply_n; sep=" "))
                     !isempty(digits) && (comment_count = something(tryparse(Int, digits), 0))
                 end
 
@@ -511,7 +518,7 @@ function document(api::API, board_id::AbstractString, document_id::AbstractStrin
 
     # 제목
     title_n = _query1(head, "h3.title span.title_subject")
-    title   = title_n === nothing ? "" : _text(title_n)
+    title   = title_n === nothing ? "" : _innertext(title_n; sep=" ")
 
     # 작성자
     writer_n  = _query1(head, "div.gall_writer")
@@ -529,13 +536,13 @@ function document(api::API, board_id::AbstractString, document_id::AbstractStrin
     date_n   = _query1(head, "span.gall_date")
     time_str = date_n === nothing ? "00:00" : begin
         full = something(_attr(date_n, "title"), "")
-        isempty(full) ? strip(_text(date_n)) : full
+        isempty(full) ? strip(_innertext(date_n; sep=" ")) : full
     end
     post_time = try _parse_time(time_str) catch; now() end
 
     # 본문: body_node 에서 Lexbor.Node 로 변환 후 순회
     bnode    = Lexbor.Node(body_node)
-    contents = strip(_text(bnode))
+    contents = strip(_innertext(bnode; sep=" "))
 
     # 이미지
     images = Image[]
@@ -555,7 +562,7 @@ function document(api::API, board_id::AbstractString, document_id::AbstractStrin
     view_n     = _query1(head, "span.gall_count")
     view_count = 0
     if view_n !== nothing
-        vs = split(_text(view_n))
+        vs = split(_innertext(view_n; sep=" "))
         !isempty(vs) && (view_count = something(tryparse(Int, vs[end]), 0))
     end
 
@@ -563,14 +570,14 @@ function document(api::API, board_id::AbstractString, document_id::AbstractStrin
     vote_n   = _query1(head, "span.gall_reply_num")
     voteup   = 0
     if vote_n !== nothing
-        vs = split(_text(vote_n))
+        vs = split(_innertext(vote_n; sep=" "))
         !isempty(vs) && (voteup = something(tryparse(Int, vs[end]), 0))
     end
 
     # votedown / logined_voteup: PC 갤러리에서는 별도 엔드포인트 (0 으로 초기화)
     votedown = 0
     logined  = 0
-    html_str = _text(bnode)
+    html_str = _innertext(bnode; sep=" ")
 
     Document(
         document_id, board_id, title, author, author_id,
@@ -702,9 +709,9 @@ function write_comment(api::API, board_id::AbstractString, document_id::Abstract
     csrf_n     = _query1(doc, "meta[name='csrf-token']")
     csrf_token = csrf_n !== nothing ? something(_attr(csrf_n, "content"), "") : ""
     title_n    = _query1(doc, "span.tit")
-    title      = title_n !== nothing ? strip(_text(title_n)) : ""
+    title      = title_n !== nothing ? strip(_innertext(title_n; sep=" ")) : ""
     bnm_n      = _query1(doc, "a.gall-tit-lnk")
-    board_name = bnm_n !== nothing ? strip(_text(bnm_n)) : ""
+    board_name = bnm_n !== nothing ? strip(_innertext(bnm_n; sep=" ")) : ""
 
     con_key = _access("com_submit", url; require_conkey=false, csrf_token=csrf_token)
 
@@ -851,7 +858,7 @@ function remove_document(api::API, board_id::AbstractString, document_id::Abstra
     csrf_n = _query1(doc, "meta[name='csrf-token']")
     csrf   = csrf_n !== nothing ? something(_attr(csrf_n, "content"), "") : ""
     bnm_n  = _query1(doc, "a.gall-tit-lnk")
-    board_name = bnm_n !== nothing ? strip(_text(bnm_n)) : ""
+    board_name = bnm_n !== nothing ? strip(_innertext(bnm_n; sep=" ")) : ""
 
     con_key = _access("board_Del", url; require_conkey=false, csrf_token=csrf)
     payload = [
@@ -906,7 +913,7 @@ function _write_or_modify(api::API, board_id::AbstractString;
     csrf_n     = _query1(doc, "meta[name='csrf-token']")
     csrf       = csrf_n !== nothing ? something(_attr(csrf_n, "content"), "") : ""
     bnm_n      = _query1(doc, "a.gall-tit-lnk")
-    board_name = bnm_n !== nothing ? strip(_text(bnm_n)) : ""
+    board_name = bnm_n !== nothing ? strip(_innertext(bnm_n; sep=" ")) : ""
 
     con_key = _access("dc_check2", url; require_conkey=false, csrf_token=csrf)
 
