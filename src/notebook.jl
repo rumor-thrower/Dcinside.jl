@@ -153,8 +153,6 @@ let ch = Dcinside.board(api, gallery_name; num=5)
 end
 
 # ╔═╡ c1a2b3d4-e5f6-7890-abcd-ef1234567890
-# ╠═╡ disabled = true
-#=╠═╡
 # title 열 → Kiwi 형태소 분석 (명사 추출) → id·title·morphemes 열만 출력
 let time
 	ch = Dcinside.board(api, gallery_name; num=10)
@@ -162,7 +160,6 @@ let time
 	DcinsideDataFrames.parse_titles!(df, Kiwi.nouns)
 	df[!, [:id, :title, :morphemes]]
 end
-  ╠═╡ =#
 
 # ╔═╡ aa000013-1301-4000-8000-000000000013
 begin
