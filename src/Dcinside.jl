@@ -242,17 +242,31 @@ function _attr(node::Lexbor.Node, name::AbstractString)
     isnothing(attrs) ? nothing : get(attrs, name, nothing)
 end
 
-"""全 텍스트 노드를 sep 으로 이어 붙임 (lxml `itertext()` 대응)."""
-function _innertext(node::Lexbor.Node; sep::AbstractString="\n")::String
+"""全 텍스트 노드를 sep 으로 이어 붙임 (lxml `itertext()` 대응).
+
+`skip_tags` 에 포함된 태그(기본: script · style)의 서브트리는 통째로 건너뜀.
+재귀 DFS 로 구현해 PreOrderDFS 의 "서브트리 탈출 이벤트 없음" 문제를 회피한다.
+"""
+function _innertext(node::Lexbor.Node; sep::AbstractString="\n",
+                    skip_tags::Tuple=(:script, :style))::String
     parts = String[]
-    for n in PreOrderDFS(node)
-        Lexbor.is_text(n) || continue
-        t = Lexbor.text(n)
-        isnothing(t) && continue
-        ts = strip(t)
-        isempty(ts) || push!(parts, ts)
-    end
+    _collect_text!(parts, node, Set(skip_tags))
     join(parts, sep)
+end
+
+function _collect_text!(parts::Vector{String}, node::Lexbor.Node, skip_set::Set)
+    for child in node
+        if Lexbor.is_text(child)
+            t = Lexbor.text(child)
+            isnothing(t) && continue
+            ts = strip(t)
+            isempty(ts) || push!(parts, ts)
+        elseif Lexbor.is_element(child)
+            tg = Lexbor.tag(child)
+            tg !== nothing && tg in skip_set && continue  # 서브트리 전체 스킵
+            _collect_text!(parts, child, skip_set)
+        end
+    end
 end
 
 # ============================================================
