@@ -7,7 +7,7 @@ using JSON
 using Dates
 
 export API
-export gallery, board, document, comments
+export gallery, board, search_board, document, comments
 export write_comment, write_document, modify_document, remove_document
 export DocumentIndex, Document, Comment, Image
 
@@ -291,6 +291,20 @@ function _list_url(board_id, page; recommend=false)
     end
 end
 
+"""검색 결과 URL 생성 (제목+본문 동시 검색).
+- `s_type=search_subject_memo`: DCinside 제목+본문 검색 파라미터
+"""
+function _search_url(board_id, page, keyword::AbstractString)
+    gtype   = _gallery_type(board_id)
+    encoded = HTTP.URIs.escapeuri(keyword)
+    suffix  = "&s_type=search_subject_memo&s_keyword=$encoded"
+    if gtype == "mgallery"
+        "https://gall.dcinside.com/mgallery/board/lists/?id=$board_id&page=$page$suffix"
+    else
+        "https://gall.dcinside.com/board/lists/?id=$board_id&page=$page$suffix"
+    end
+end
+
 """글 본문 URL 생성."""
 function _view_url(board_id, document_id)
     gtype = _gallery_type(board_id)
@@ -521,6 +535,126 @@ function board(api::API, board_id::AbstractString;
                     something(tryparse(Int, strip(_innertext(recom_td; sep=" "))), 0)
 
                 # 댓글수: span.reply_num 텍스트 "[N]" 또는 "[N/M]"
+                reply_n       = _query1(tr, "span.reply_num")
+                comment_count = 0
+                if reply_n !== nothing
+                    digits = filter(isdigit, _innertext(reply_n; sep=" "))
+                    !isempty(digits) && (comment_count = something(tryparse(Int, digits), 0))
+                end
+
+                idx = DocumentIndex(
+                    document_id, board_id, title, has_image, image_available,
+                    author, post_time, view_count, comment_count, voteup_count, subject,
+                    () -> document(api, board_id, document_id),
+                    () -> comments(api, board_id, document_id),
+                )
+                put!(ch, idx)
+                found_any  = true
+                remaining -= 1
+                remaining == 0 && return
+            end
+
+            found_any || break
+            page += 1
+        end
+    end
+end
+
+"""
+    search_board(api, board_id, keyword; num=-1, start_page=1)
+    -> Channel{DocumentIndex}
+
+갤러리 제목+본문 검색 결과를 `Channel` (lazy) 로 반환.
+
+- `num=-1` : 무제한
+- 검색 결과는 페이지당 약 20개 (일반 게시판의 200개와 다름)
+
+# 예시
+```julia
+for idx in search_board(api, "genrenovel", "장애"; num=20)
+    println(idx.title)
+end
+```
+"""
+function search_board(api::API, board_id::AbstractString, keyword::AbstractString;
+                      num::Int=-1,
+                      start_page::Int=1)::Channel{DocumentIndex}
+
+    Channel{DocumentIndex}(32) do ch
+        page      = start_page
+        remaining = num
+
+        while remaining != 0
+            url   = _search_url(board_id, page, keyword)
+            html  = _get_retry(url)
+            isempty(html) && break
+            doc   = _parse_html(html)
+
+            rows = filter(_query(doc, "tbody.listwrap2 > tr.ub-content")) do tr
+                no    = _attr(tr, "data-no")
+                dtype = something(_attr(tr, "data-type"), "")
+                no !== nothing &&
+                !occursin("icon_notice", dtype) &&
+                !occursin("icon_survey", dtype)
+            end
+
+            isempty(rows) && break
+            found_any = false
+
+            for tr in rows
+                document_id = something(_attr(tr, "data-no"), "")
+                isempty(document_id) && continue
+
+                subj_n  = _query1(tr, "td.gall_subject > b")
+                subject = subj_n === nothing ? nothing : begin
+                    t = _innertext(subj_n; sep=" ")
+                    isempty(t) ? nothing : t
+                end
+
+                title_b  = _query1(tr, "td.gall_tit b")
+                title_a  = _query1(tr, "td.gall_tit a:not(.reply_numbox)")
+                title    = if title_b !== nothing
+                    _innertext(title_b; sep=" ")
+                elseif title_a !== nothing
+                    parts = String[]
+                    for n in PreOrderDFS(title_a)
+                        Lexbor.is_text(n) || continue
+                        t = Lexbor.text(n)
+                        isnothing(t) && continue
+                        ts = strip(t)
+                        isempty(ts) || push!(parts, ts)
+                    end
+                    join(parts, " ")
+                else
+                    ""
+                end
+
+                has_image       = !isempty(_query(tr, "td.gall_tit em.icon_img"))
+                image_available = has_image
+
+                writer_td = _query1(tr, "td.gall_writer")
+                author = ""
+                if writer_td !== nothing
+                    nick = something(_attr(writer_td, "data-nick"), "")
+                    ip   = something(_attr(writer_td, "data-ip"),   "")
+                    author = isempty(ip) ? nick : "$nick($ip)"
+                end
+
+                date_td  = _query1(tr, "td.gall_date")
+                time_str = date_td === nothing ? "00:00" : begin
+                    full = something(_attr(date_td, "title"), "")
+                    isempty(full) ? _innertext(date_td; sep=" ") : full
+                end
+                post_time = try _parse_time(time_str) catch; now() end
+
+                view_td    = _query1(tr, "td.gall_count")
+                view_count = view_td === nothing ? 0 :
+                    something(tryparse(Int, strip(_innertext(view_td; sep=" "))), 0)
+
+                recom_td     = _query1(tr, "td.gall_recommend")
+                voteup_count = recom_td === nothing ? 0 :
+                    something(tryparse(Int, strip(_innertext(recom_td; sep=" "))), 0)
+
                 reply_n       = _query1(tr, "span.reply_num")
                 comment_count = 0
                 if reply_n !== nothing
