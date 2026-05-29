@@ -281,6 +281,8 @@ begin
 		filter!(r -> r.keyword != "불구" || occursin(r"불구(?!하)", r.text), df)
 		# "실명제" = 實名制(금융 실명제) 용례 제거 — 失明(시력 상실) 의미의 "실명"만 유지
 		filter!(r -> r.keyword != "실명" || occursin(r"실명(?!제)", r.text), df)
+		# "활자폐기물" 등 활자+폐기물 합성어 내 "자폐" 제거 — 自閉(자폐증) 의미만 유지
+		filter!(r -> r.keyword != "자폐" || occursin(r"(?<!활)자폐", r.text), df)
 		transform!(df, :text => ByRow(t -> Kiwi.nouns(t))                      => :nouns)
 		transform!(df, :text => ByRow(t -> classify_frame(t, FRAME_VOCAB))     => :frame)
 		df
