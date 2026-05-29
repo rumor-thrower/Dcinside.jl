@@ -277,6 +277,8 @@ begin
 
 	corpus_nlp = let
 		df = copy(corpus_df)
+		# "불구하고/하여/하다" = "despite"(역접) 용례 제거 — 장애 의미의 "불구"만 유지
+		filter!(r -> r.keyword != "불구" || occursin(r"불구(?!하)", r.text), df)
 		transform!(df, :text => ByRow(t -> Kiwi.nouns(t))                      => :nouns)
 		transform!(df, :text => ByRow(t -> classify_frame(t, FRAME_VOCAB))     => :frame)
 		df
