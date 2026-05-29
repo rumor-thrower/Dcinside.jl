@@ -277,6 +277,8 @@ begin
 
 	corpus_nlp = let
 		df = copy(corpus_df)
+		# 플랫폼 공식 봇 계정 제거
+		filter!(r -> r.author != "댓글돌이", df)
 		# "불구하고/하여/하다" = "despite"(역접) 용례 제거 — 장애 의미의 "불구"만 유지
 		filter!(r -> r.keyword != "불구" || occursin(r"불구(?!하)", r.text), df)
 		# "실명제" = 實名制(금융 실명제) 용례 제거 — 失明(시력 상실) 의미의 "실명"만 유지
