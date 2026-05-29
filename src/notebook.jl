@@ -179,7 +179,8 @@ begin
 	)
 
 	const KWIC_WINDOW = 40
-	md"상수 정의 완료 — 키워드 $(length(DISABILITY_KEYWORDS))개, 프레임 $(length(FRAME_VOCAB))종"
+	const OUTPUT_DIR  = let d = joinpath(@__DIR__, "..", "output"); mkpath(d); d end
+	md"상수 정의 완료 — 키워드 $(length(DISABILITY_KEYWORDS))개, 프레임 $(length(FRAME_VOCAB))종 | 출력: $(OUTPUT_DIR)"
 end
 
 # ╔═╡ aa000014-1401-4000-8000-000000000014
@@ -349,31 +350,25 @@ end
 # ╔═╡ aa000019-1901-4000-8000-000000000019
 # 키워드 빈도 막대 차트
 let
-	freq = sort(combine(groupby(corpus_nlp, :keyword), nrow => :n), :n; rev=true)
+	freq  = sort(combine(groupby(corpus_nlp, :keyword), nrow => :n), :n; rev=true)
 	labels = freq.keyword
 	vals   = freq.n
 	max_v  = max(maximum(vals), 1)
 	W, H   = 620, 280
 	bar_w  = (W - 80) ÷ length(labels)
 
-	bars = [@htl("""
-		<g>
-		  <rect x=$(60 + (i-1)*bar_w) y=$(H - 50 - round(Int, v/max_v*180))
-		        width=$(bar_w - 4) height=$(round(Int, v/max_v*180))
-		        fill="#4e79a7" rx="2"/>
-		  <text x=$(60 + (i-1)*bar_w + bar_w÷2) y=$(H - 32)
-		        text-anchor="middle" font-size="12">$(labels[i])</text>
-		  <text x=$(60 + (i-1)*bar_w + bar_w÷2) y=$(H - 54 - round(Int, v/max_v*180))
-		        text-anchor="middle" font-size="11" fill="#333">$v</text>
-		</g>
-	""") for (i, v) in enumerate(vals)]
+	rects = join(["""<g>
+	  <rect x="$(60+(i-1)*bar_w)" y="$(H-50-round(Int,v/max_v*180))"
+	        width="$(bar_w-4)" height="$(round(Int,v/max_v*180))" fill="#4e79a7" rx="2"/>
+	  <text x="$(60+(i-1)*bar_w+bar_w÷2)" y="$(H-32)"
+	        text-anchor="middle" font-size="12">$(labels[i])</text>
+	  <text x="$(60+(i-1)*bar_w+bar_w÷2)" y="$(H-54-round(Int,v/max_v*180))"
+	        text-anchor="middle" font-size="11" fill="#333">$(v)</text>
+	</g>""" for (i,v) in enumerate(vals)], "\n")
 
-	@htl("""<div>
-		<h4 style="font-family:sans-serif;margin:8px 0">키워드별 수집 행 수 (제목·본문·댓글 합산)</h4>
-		<svg width=$W height=$H style="font-family:sans-serif;overflow:visible">
-		  $(bars)
-		</svg>
-	</div>""")
+	svg = """<svg xmlns="http://www.w3.org/2000/svg" width="$W" height="$H" style="font-family:sans-serif;overflow:visible">$rects</svg>"""
+	write(joinpath(OUTPUT_DIR, "01_keyword_freq.svg"), svg)
+	HTML("""<div><h4 style="font-family:sans-serif;margin:8px 0">키워드별 수집 행 수 (제목·본문·댓글 합산)</h4>$svg</div>""")
 end
 
 # ╔═╡ aa000020-2001-4000-8000-000000000020
@@ -388,36 +383,31 @@ let
 		:ambiguous => "#bab0ac",
 		:none      => "#d3d3d3",
 	)
-	counts = combine(groupby(corpus_nlp, :frame), nrow => :n)
-	labels = [string(f) for f in frame_order]
-	vals   = [coalesce(only(filter(r -> r.frame == f, eachrow(counts)).n |> first |> x -> [x]), 0)
-	          for f in frame_order]
+	counts    = combine(groupby(corpus_nlp, :frame), nrow => :n)
+	count_map = Dict(r.frame => r.n for r in eachrow(counts))
+	present   = [(string(f), get(count_map, f, 0), frame_color[f])
+	             for f in frame_order if get(count_map, f, 0) > 0]
 
-	# 실제 존재하는 프레임만 표시
-	present = [(l, v, frame_color[frame_order[i]])
-	           for (i, (l, v)) in enumerate(zip(labels, vals)) if v > 0]
-	isempty(present) && return md"데이터 없음"
+	if isempty(present)
+		HTML("<p style='font-family:sans-serif'>데이터 없음</p>")
+	else
+		max_v = max(maximum(x[2] for x in present), 1)
+		W, H  = 560, 280
+		bar_w = (W - 80) ÷ length(present)
 
-	max_v = max(maximum(x[2] for x in present), 1)
-	W, H  = 560, 280
-	bar_w = (W - 80) ÷ length(present)
-
-	bars = [@htl("""
-		<g>
-		  <rect x=$(60 + (i-1)*bar_w) y=$(H - 50 - round(Int, v/max_v*180))
-		        width=$(bar_w - 6) height=$(round(Int, v/max_v*180))
-		        fill=$c rx="2"/>
-		  <text x=$(60 + (i-1)*bar_w + (bar_w-6)÷2) y=$(H - 32)
+		rects = join(["""<g>
+		  <rect x="$(60+(i-1)*bar_w)" y="$(H-50-round(Int,v/max_v*180))"
+		        width="$(bar_w-6)" height="$(round(Int,v/max_v*180))" fill="$c" rx="2"/>
+		  <text x="$(60+(i-1)*bar_w+(bar_w-6)÷2)" y="$(H-32)"
 		        text-anchor="middle" font-size="12">$l</text>
-		  <text x=$(60 + (i-1)*bar_w + (bar_w-6)÷2) y=$(H - 54 - round(Int, v/max_v*180))
+		  <text x="$(60+(i-1)*bar_w+(bar_w-6)÷2)" y="$(H-54-round(Int,v/max_v*180))"
 		        text-anchor="middle" font-size="11" fill="#333">$v</text>
-		</g>
-	""") for (i, (l, v, c)) in enumerate(present)]
+		</g>""" for (i,(l,v,c)) in enumerate(present)], "\n")
 
-	@htl("""<div>
-		<h4 style="font-family:sans-serif;margin:8px 0">프레임 분포</h4>
-		<svg width=$W height=$H style="font-family:sans-serif;overflow:visible">$(bars)</svg>
-	</div>""")
+		svg = """<svg xmlns="http://www.w3.org/2000/svg" width="$W" height="$H" style="font-family:sans-serif;overflow:visible">$rects</svg>"""
+		write(joinpath(OUTPUT_DIR, "02_frame_dist.svg"), svg)
+		HTML("""<div><h4 style="font-family:sans-serif;margin:8px 0">프레임 분포</h4>$svg</div>""")
+	end
 end
 
 # ╔═╡ aa000021-2101-4000-8000-000000000021
@@ -426,28 +416,30 @@ let
 	frames  = [:gaming, :catharsis, :sympathy, :critical]
 	max_val = max(maximum(maximum(cooc_df[!, f]) for f in frames), 1)
 
-	cell_style(v) = let
-		intensity = round(Int, (1 - v/max_val) * 220)
-		c = string(intensity, base=16, pad=2)
+	cell_bg(v) = let
+		i = round(Int, (1 - v/max_val) * 220)
+		c = string(i, base=16, pad=2)
 		"background:#$(c)$(c)ff;padding:6px 12px;text-align:center;font-size:13px"
 	end
 
-	header_cells = [@htl("<th style='padding:6px 12px;background:#f0f0f0'>$f</th>") for f in frames]
-	data_rows = [@htl("""<tr>
-		<td style='padding:6px 10px;font-weight:bold;background:#f8f8f8'>$(row.keyword)</td>
-		$([@htl("<td style=$(cell_style(row[f]))>$(row[f])</td>") for f in frames])
-	</tr>""") for row in eachrow(cooc_df)]
+	header = join(["<th style='padding:6px 12px;background:#f0f0f0'>$f</th>" for f in frames])
+	rows   = join(["<tr><td style='padding:6px 10px;font-weight:bold;background:#f8f8f8'>$(row.keyword)</td>" *
+	               join(["<td style='$(cell_bg(row[f]))'>$(row[f])</td>" for f in frames]) *
+	               "</tr>" for row in eachrow(cooc_df)])
+	table  = """<table style="border-collapse:collapse;font-family:sans-serif">
+	  <thead><tr><th style="padding:6px 10px;background:#f0f0f0">키워드</th>$header</tr></thead>
+	  <tbody>$rows</tbody></table>"""
 
-	@htl("""<div>
+	write(joinpath(OUTPUT_DIR, "03_cooc_heatmap.html"), """<!DOCTYPE html>
+	<html><head><meta charset="utf-8"></head><body>
+	<h3 style="font-family:sans-serif">장애 키워드 × 프레임 공기어 히트맵</h3>
+	<p style="font-size:12px;color:#666;font-family:sans-serif">진할수록 공기어 빈도 높음</p>
+	$table</body></html>""")
+
+	HTML("""<div>
 		<h4 style="font-family:sans-serif;margin:8px 0">장애 키워드 × 프레임 공기어 히트맵</h4>
 		<p style="font-size:12px;color:#666;font-family:sans-serif">진할수록 공기어 빈도 높음</p>
-		<table style="border-collapse:collapse;font-family:sans-serif">
-		  <thead><tr>
-		    <th style="padding:6px 10px;background:#f0f0f0">키워드</th>
-		    $(header_cells)
-		  </tr></thead>
-		  <tbody>$(data_rows)</tbody>
-		</table>
+		$table
 	</div>""")
 end
 
@@ -463,21 +455,18 @@ let
 	W, H   = 360, 260
 	bar_w  = (W - 80) ÷ 2
 
-	bars = [@htl("""
-		<g>
-		  <rect x=$(60 + (i-1)*(bar_w+10)) y=$(H - 50 - round(Int, v/max_v*160))
-		        width=$bar_w height=$(round(Int, v/max_v*160)) fill=$(colors[i]) rx="2"/>
-		  <text x=$(60 + (i-1)*(bar_w+10) + bar_w÷2) y=$(H - 30)
-		        text-anchor="middle" font-size="12">$(labels[i])</text>
-		  <text x=$(60 + (i-1)*(bar_w+10) + bar_w÷2) y=$(H - 54 - round(Int, v/max_v*160))
-		        text-anchor="middle" font-size="13" font-weight="bold">$v</text>
-		</g>
-	""") for (i, v) in enumerate(vals)]
+	rects = join(["""<g>
+	  <rect x="$(60+(i-1)*(bar_w+10))" y="$(H-50-round(Int,v/max_v*160))"
+	        width="$bar_w" height="$(round(Int,v/max_v*160))" fill="$(colors[i])" rx="2"/>
+	  <text x="$(60+(i-1)*(bar_w+10)+bar_w÷2)" y="$(H-30)"
+	        text-anchor="middle" font-size="12">$(labels[i])</text>
+	  <text x="$(60+(i-1)*(bar_w+10)+bar_w÷2)" y="$(H-54-round(Int,v/max_v*160))"
+	        text-anchor="middle" font-size="13" font-weight="bold">$v</text>
+	</g>""" for (i,v) in enumerate(vals)], "\n")
 
-	@htl("""<div>
-		<h4 style="font-family:sans-serif;margin:8px 0">비판적 담론 부재 시각화</h4>
-		<svg width=$W height=$H style="font-family:sans-serif;overflow:visible">$(bars)</svg>
-	</div>""")
+	svg = """<svg xmlns="http://www.w3.org/2000/svg" width="$W" height="$H" style="font-family:sans-serif;overflow:visible">$rects</svg>"""
+	write(joinpath(OUTPUT_DIR, "04_critical_absence.svg"), svg)
+	HTML("""<div><h4 style="font-family:sans-serif;margin:8px 0">비판적 담론 부재 시각화</h4>$svg</div>""")
 end
 
 # ╔═╡ aa000023-2301-4000-8000-000000000023
