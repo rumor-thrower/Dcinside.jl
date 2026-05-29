@@ -298,7 +298,8 @@ end
 """
 function kwic(df::DataFrame, keyword::AbstractString;
               window::Int=KWIC_WINDOW, n::Int=30)
-	results = NamedTuple[]
+	results  = NamedTuple[]
+	seen_pos = Set{Tuple{String,Int}}()   # (source_id, byte_offset) — 중복 제거
 	for row in eachrow(df)
 		text   = row.text
 		offset = firstindex(text)
@@ -306,6 +307,11 @@ function kwic(df::DataFrame, keyword::AbstractString;
 			r = findnext(keyword, text, offset)
 			r === nothing && break
 			ks, ke = first(r), last(r)
+
+			# 동일 문서·동일 위치(다른 keyword 행으로 중복 수집된 경우) 스킵
+			pos_key = (row.source_id, ks)
+			pos_key in seen_pos && (offset = nextind(text, ke); continue)
+			push!(seen_pos, pos_key)
 
 			# prevind/nextind으로 문자 경계를 정확히 계산 (멀티바이트 안전)
 			# s[i:j] 는 i·j 모두 문자 시작 바이트여야 함
