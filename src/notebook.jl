@@ -302,12 +302,18 @@ function kwic(df::DataFrame, keyword::AbstractString;
 			ks, ke = first(r), last(r)
 
 			# prevind/nextind으로 문자 경계를 정확히 계산 (멀티바이트 안전)
+			# s[i:j] 는 i·j 모두 문자 시작 바이트여야 함
 			ls = max(firstindex(text), prevind(text, ks, window))
-			re = nextind(text, ke, window + 1) - 1   # window번째 문자의 마지막 바이트
+			left = text[ls:prevind(text, ks)]
 
-			left  = text[ls:prevind(text, ks)]
-			right = nextind(text, ke) > ncodeunits(text) ? "" :
-			        text[nextind(text, ke):re]
+			right_start = nextind(text, ke)
+			right = if right_start > ncodeunits(text)
+				""
+			else
+				re_raw = nextind(text, ke, window)   # window번째 문자의 시작 바이트
+				re     = re_raw <= ncodeunits(text) ? re_raw : lastindex(text)
+				text[right_start:re]
+			end
 
 			push!(results, (
 				left_context  = left,
@@ -551,9 +557,9 @@ end
 # ╟─aa000013-1301-4000-8000-000000000013
 # ╟─aa000014-1401-4000-8000-000000000014
 # ╟─aa000015-1501-4000-8000-000000000015
-# ╠═aa000016-1601-4000-8000-000000000016
+# ╟─aa000016-1601-4000-8000-000000000016
 # ╟─aa000017-1701-4000-8000-000000000017
-# ╠═aa000018-1801-4000-8000-000000000018
+# ╟─aa000018-1801-4000-8000-000000000018
 # ╟─aa000019-1901-4000-8000-000000000019
 # ╟─aa000020-2001-4000-8000-000000000020
 # ╟─aa000021-2101-4000-8000-000000000021
