@@ -91,7 +91,10 @@ end
 end
 
 # ╔═╡ c03b12c8-ea24-4e68-a89a-a616db2b4798
-using PlutoUI
+begin
+	using PlutoUI
+	using DataFrames
+end
 
 # ╔═╡ d8b7dad9-867f-400d-87cc-e184d47f9880
 include("Dcinside.jl")
@@ -271,8 +274,6 @@ begin
 		winners = [f for (f, s) in scores if s == best]
 		length(winners) == 1 ? only(winners) : :ambiguous
 	end
-
-	import DataFrames: transform!, ByRow, copy
 
 	corpus_nlp = let
 		df = copy(corpus_df)
@@ -472,7 +473,11 @@ end
 # ╔═╡ aa000023-2301-4000-8000-000000000023
 @bind kwic_keyword Select(DISABILITY_KEYWORDS)
 
-# ╔═╡ aa000023b-2302-4000-8000-00000000002b
+# ╔═╡ aa000024-2401-4000-8000-000000000024
+# 키워드별 고빈도 공기 명사 Top-10
+@bind topn_keyword Select(DISABILITY_KEYWORDS)
+
+# ╔═╡ 2496d0f4-5b45-11f1-9781-0f03f23dfb35
 let kwic_keyword
 	rows_df = kwic(corpus_nlp, kwic_keyword; n=30)
 	nrow(rows_df) == 0 && return md"검색 결과 없음"
@@ -498,11 +503,7 @@ let kwic_keyword
 	</div>""")
 end
 
-# ╔═╡ aa000024-2401-4000-8000-000000000024
-# 키워드별 고빈도 공기 명사 Top-10
-@bind topn_keyword Select(DISABILITY_KEYWORDS)
-
-# ╔═╡ aa000024b-2402-4000-8000-00000000002c
+# ╔═╡ 2496d5fe-5b45-11f1-8cad-db3dae0703dd
 let topn_keyword
 	sub    = filter(r -> occursin(topn_keyword, r.text), eachrow(corpus_nlp))
 	all_n  = [n for r in sub for n in r.nouns]
@@ -555,6 +556,6 @@ end
 # ╠═aa000021-2101-4000-8000-000000000021
 # ╠═aa000022-2201-4000-8000-000000000022
 # ╠═aa000023-2301-4000-8000-000000000023
-# ╠═aa000023b-2302-4000-8000-00000000002b
 # ╠═aa000024-2401-4000-8000-000000000024
-# ╠═aa000024b-2402-4000-8000-00000000002c
+# ╠═2496d0f4-5b45-11f1-9781-0f03f23dfb35
+# ╠═2496d5fe-5b45-11f1-8cad-db3dae0703dd
