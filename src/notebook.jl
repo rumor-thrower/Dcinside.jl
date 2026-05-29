@@ -478,7 +478,7 @@ end
 @bind topn_keyword Select(DISABILITY_KEYWORDS)
 
 # ╔═╡ 2496d0f4-5b45-11f1-9781-0f03f23dfb35
-let kwic_keyword
+let
 	rows_df = kwic(corpus_nlp, kwic_keyword; n=30)
 	nrow(rows_df) == 0 && return md"검색 결과 없음"
 
@@ -504,7 +504,7 @@ let kwic_keyword
 end
 
 # ╔═╡ 2496d5fe-5b45-11f1-8cad-db3dae0703dd
-let topn_keyword
+let
 	sub    = filter(r -> occursin(topn_keyword, r.text), eachrow(corpus_nlp))
 	all_n  = [n for r in sub for n in r.nouns]
 	counts = sort(collect(Dict(n => count(==(n), all_n) for n in unique(all_n))),
