@@ -295,17 +295,20 @@ function kwic(df::DataFrame, keyword::AbstractString;
 	results = NamedTuple[]
 	for row in eachrow(df)
 		text   = row.text
-		offset = 1
+		offset = firstindex(text)
 		while true
 			r = findnext(keyword, text, offset)
 			r === nothing && break
 			ks, ke = first(r), last(r)
-			ls  = max(1, ks - window)
-			re  = min(ncodeunits(text), ke + window)
-			left  = isvalid(text, ls) ? text[ls:prevind(text, ks)] :
-			        text[nextind(text, ls - 1):prevind(text, ks)]
-			right = isvalid(text, nextind(text, ke)) ?
-			        text[nextind(text, ke):re] : ""
+
+			# prevind/nextind으로 문자 경계를 정확히 계산 (멀티바이트 안전)
+			ls = max(firstindex(text), prevind(text, ks, window))
+			re = nextind(text, ke, window + 1) - 1   # window번째 문자의 마지막 바이트
+
+			left  = text[ls:prevind(text, ks)]
+			right = nextind(text, ke) > ncodeunits(text) ? "" :
+			        text[nextind(text, ke):re]
+
 			push!(results, (
 				left_context  = left,
 				keyword_hit   = keyword,
