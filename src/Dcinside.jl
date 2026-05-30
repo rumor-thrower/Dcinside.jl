@@ -46,6 +46,16 @@ const BASE_COOKIES = Dict{String,String}(
     "_ga" => "GA1.2.693521455.1588839880",
 )
 
+# ── 전역 요청 스로틀 (Dcinside rate-limit 방지) ─────────────
+const _last_request_time = Ref(0.0)
+const _REQUEST_MIN_INTERVAL = 1.5  # 요청 사이 최소 간�� (초)
+
+function _throttle()
+    elapsed = time() - _last_request_time[]
+    elapsed < _REQUEST_MIN_INTERVAL && sleep(_REQUEST_MIN_INTERVAL - elapsed)
+    _last_request_time[] = time()
+end
+
 # ============================================================
 # URL encoding helpers  (Python의 quote / unquote 대응)
 # ============================================================
@@ -172,14 +182,31 @@ function _get(url::AbstractString;
               headers = GET_HEADERS,
               cookies::Dict{String,String} = BASE_COOKIES,
               redirect::Bool = true)::String
+    _throttle()
     resp = HTTP.get(url; headers, cookies, redirect)
     String(resp.body)
+end
+
+"""
+    _get_retry(url; retries=3, delay=2.0, kwargs...) -> String
+
+서버가 빈 HTML(Content-Length: 0)을 반환하는 경우 `delay` 초씩 기다리며
+최대 `retries` 회 재시도한다. 모든 시도 후에도 빈 응답이면 빈 문자열 반환.
+"""
+function _get_retry(url::AbstractString; retries::Int=3, delay::Float64=5.0, kwargs...)::String
+    for attempt in 1:retries
+        html = try _get(url; kwargs...) catch; "" end
+        !isempty(html) && return html
+        attempt < retries && sleep(delay)
+    end
+    return ""
 end
 
 # 최종 리다이렉트 URL 도 함께 반환
 function _get_with_url(url::AbstractString;
                        headers = GET_HEADERS,
                        cookies::Dict{String,String} = BASE_COOKIES)::Tuple{String,String}
+    _throttle()
     resp = HTTP.get(url; headers, cookies, redirect=true)
     body    = String(resp.body)
     final_url = string(resp.request.url)
@@ -190,6 +217,7 @@ function _post(url::AbstractString,
                payload;                          # Pairs 또는 Dict
                headers = XML_HTTP_REQ_HEADERS,
                cookies::Dict{String,String} = BASE_COOKIES)::String
+    _throttle()
     pairs = payload isa Dict ? collect(payload) : payload
     body  = HTTP.URIs.escapeuri(pairs)
     resp  = HTTP.post(url; headers, cookies, body)
@@ -214,10 +242,63 @@ function _attr(node::Lexbor.Node, name::AbstractString)
     isnothing(attrs) ? nothing : get(attrs, name, nothing)
 end
 
-"""텍스트 노드의 텍스트를 반환. 엘리먼트 노드에는 `nothing` 반환."""
-function _text(node; default::String="")::String
-    t = Lexbor.text(node)
-    isnothing(t) ? default : strip(string(t))
+"""全 텍스트 노드를 sep 으로 이어 붙임 (lxml `itertext()` 대응)."""
+function _innertext(node::Lexbor.Node; sep::AbstractString="\n")::String
+    parts = String[]
+    for n in PreOrderDFS(node)
+        Lexbor.is_text(n) || continue
+        t = Lexbor.text(n)
+        isnothing(t) && continue
+        ts = strip(t)
+        isempty(ts) || push!(parts, ts)
+    end
+    join(parts, sep)
+end
+
+# ============================================================
+# Internal: gallery type detection
+# ============================================================
+
+# board_id → "mgallery" | "board" (캐시)
+const _gtype_cache = Dict{String,String}()
+
+"""
+`board_id` 가 마이너 갤러리면 `"mgallery"`, 일반 갤러리면 `"board"` 반환.
+결과는 세션 내에서 캐싱된다.
+"""
+function _gallery_type(board_id::AbstractString)::String
+    get!(_gtype_cache, string(board_id)) do
+        # m.dcinside.com 리다이렉트를 따라가면 gtype 을 알 수 있음
+        _throttle()
+        resp = HTTP.get("https://m.dcinside.com/board/$board_id";
+                        headers=GET_HEADERS, cookies=BASE_COOKIES, redirect=true)
+        url = string(resp.request.url)
+        occursin("mgallery", url) ? "mgallery" : "board"
+    end
+end
+
+"""게시판 목록 URL 생성.
+- major : `gall.dcinside.com/board/lists/?id=...`
+- minor : `gall.dcinside.com/mgallery/board/lists/?id=...`
+"""
+function _list_url(board_id, page; recommend=false)
+    gtype = _gallery_type(board_id)   # "mgallery" | "board"
+    q     = recommend ? "&recommend=1" : ""
+    if gtype == "mgallery"
+        "https://gall.dcinside.com/mgallery/board/lists/?id=$board_id&page=$page$q"
+    else
+        "https://gall.dcinside.com/board/lists/?id=$board_id&page=$page$q"
+    end
+end
+
+"""글 본문 URL 생성."""
+function _view_url(board_id, document_id)
+    gtype = _gallery_type(board_id)
+    if gtype == "mgallery"
+        "https://gall.dcinside.com/mgallery/board/view/?id=$board_id&no=$document_id"
+    else
+        "https://gall.dcinside.com/board/view/?id=$board_id&no=$document_id"
+    end
 end
 
 # ============================================================
@@ -309,7 +390,7 @@ function gallery(::API; name::Union{AbstractString,Nothing}=nothing)::Dict{Strin
     doc    = _parse_html(html)
     result = Dict{String,String}()
     for a in _query(doc, "#total_1 a")
-        board_name = _text(a)
+        board_name = _innertext(a; sep=" ")
         href       = something(_attr(a, "href"), "")
         board_id   = split(href, "/")[end]
         if name === nothing || contains(board_name, name)
@@ -340,35 +421,37 @@ end
 ```
 """
 function board(api::API, board_id::AbstractString;
-               num::Int=−1,
+               num::Int=-1,
                start_page::Int=1,
                recommend::Bool=false,
                document_id_upper_limit::Union{Int,Nothing}=nothing,
                document_id_lower_limit::Union{Int,Nothing}=nothing)::Channel{DocumentIndex}
 
-    Channel{DocumentIndex}(; csize=32) do ch
+    Channel{DocumentIndex}(32) do ch
         page      = start_page
         remaining = num
 
         while remaining != 0
-            q    = recommend ? "?recommend=1" : ""
-            url  = "https://m.dcinside.com/board/$board_id$q"
-            html = _get(url)
-            doc  = _parse_html(html)
+            url   = _list_url(board_id, page; recommend)
+            html  = _get_retry(url)
+            isempty(html) && break
+            doc   = _parse_html(html)
 
-            # 모바일 HTML: ul.gall-detail-lst > li[data-no]
-            # us-post 클래스가 있는 일반 글만 수집
-            rows = filter(_query(doc, "ul.gall-detail-lst > li")) do li
-                no  = _attr(li, "data-no")
-                cls = something(_attr(li, "class"), "")
-                no !== nothing && occursin("us-post", cls)
+            # PC 갤러리: tbody.listwrap2 > tr.ub-content[data-no]
+            # 공지(icon_notice) · 설문(icon_survey) · 광고(data-no 없음) 제외
+            rows = filter(_query(doc, "tbody.listwrap2 > tr.ub-content")) do tr
+                no    = _attr(tr, "data-no")
+                dtype = something(_attr(tr, "data-type"), "")
+                no !== nothing &&
+                !occursin("icon_notice", dtype) &&
+                !occursin("icon_survey", dtype)
             end
 
             isempty(rows) && break
             found_any = false
 
-            for li in rows
-                document_id = something(_attr(li, "data-no"), "")
+            for tr in rows
+                document_id = something(_attr(tr, "data-no"), "")
                 isempty(document_id) && continue
 
                 doc_id_int = tryparse(Int, document_id)
@@ -380,44 +463,68 @@ function board(api::API, board_id::AbstractString;
                 end
 
                 # 말머리
-                subj_n  = _query1(li, ".gall-subject")
+                subj_n  = _query1(tr, "td.gall_subject > b")
                 subject = subj_n === nothing ? nothing : begin
-                    t = _text(subj_n)
+                    t = _innertext(subj_n; sep=" ")
                     isempty(t) ? nothing : t
                 end
 
-                # 제목
-                title_n = _query1(li, ".gall-detail-tit a")
-                title   = title_n === nothing ? "" : _text(title_n)
+                # 제목: <b> 가 있으면 그 텍스트, 없으면 링크 <a> 전체 텍스트
+                # (일부 일반 글은 <b> 없이 <a> 안 텍스트 노드로 직접 존재)
+                title_b  = _query1(tr, "td.gall_tit b")
+                title_a  = _query1(tr, "td.gall_tit a:not(.reply_numbox)")
+                title    = if title_b !== nothing
+                    _innertext(title_b; sep=" ")
+                elseif title_a !== nothing
+                    parts = String[]
+                    for n in PreOrderDFS(title_a)
+                        Lexbor.is_text(n) || continue
+                        t = Lexbor.text(n)
+                        isnothing(t) && continue
+                        ts = strip(t)
+                        isempty(ts) || push!(parts, ts)
+                    end
+                    join(parts, " ")
+                else
+                    ""
+                end
 
                 # 이미지 아이콘
-                has_image       = !isempty(_query(li, ".icon-img"))
+                has_image       = !isempty(_query(tr, "td.gall_tit em.icon_img"))
                 image_available = has_image
 
-                # 작성자
-                nick_n = _query1(li, ".gall-detail-nick em")
-                author = nick_n === nothing ? "" : _text(nick_n)
+                # 작성자: data-nick + data-uid/data-ip
+                writer_td = _query1(tr, "td.gall_writer")
+                author = ""
+                if writer_td !== nothing
+                    nick = something(_attr(writer_td, "data-nick"), "")
+                    ip   = something(_attr(writer_td, "data-ip"),   "")
+                    author = isempty(ip) ? nick : "$nick($ip)"
+                end
 
-                # 날짜
-                date_n    = _query1(li, ".gall-detail-date")
-                time_str  = date_n === nothing ? "00:00" : _text(date_n)
+                # 날짜: td.gall_date[title] 에 전체 날짜 있음
+                date_td  = _query1(tr, "td.gall_date")
+                time_str = date_td === nothing ? "00:00" : begin
+                    full = something(_attr(date_td, "title"), "")
+                    isempty(full) ? _innertext(date_td; sep=" ") : full
+                end
                 post_time = try _parse_time(time_str) catch; now() end
 
                 # 조회수
-                view_n     = _query1(li, ".gall-detail-hits")
-                view_count = view_n === nothing ? 0 :
-                    something(tryparse(Int, _text(view_n)), 0)
+                view_td    = _query1(tr, "td.gall_count")
+                view_count = view_td === nothing ? 0 :
+                    something(tryparse(Int, strip(_innertext(view_td; sep=" "))), 0)
 
                 # 추천수
-                recom_n      = _query1(li, ".gall-detail-recommend")
-                voteup_count = recom_n === nothing ? 0 :
-                    something(tryparse(Int, _text(recom_n)), 0)
+                recom_td     = _query1(tr, "td.gall_recommend")
+                voteup_count = recom_td === nothing ? 0 :
+                    something(tryparse(Int, strip(_innertext(recom_td; sep=" "))), 0)
 
-                # 댓글수
-                reply_n       = _query1(li, ".gall-detail-reply")
+                # 댓글수: span.reply_num 텍스트 "[N]" 또는 "[N/M]"
+                reply_n       = _query1(tr, "span.reply_num")
                 comment_count = 0
                 if reply_n !== nothing
-                    digits = filter(isdigit, _text(reply_n))
+                    digits = filter(isdigit, _innertext(reply_n; sep=" "))
                     !isempty(digits) && (comment_count = something(tryparse(Int, digits), 0))
                 end
 
@@ -445,46 +552,49 @@ end
 게시글 상세 내용 반환. 파싱 실패 시 `nothing`.
 """
 function document(api::API, board_id::AbstractString, document_id::AbstractString)::Union{Document,Nothing}
-    url  = "https://m.dcinside.com/board/$board_id/$document_id"
-    html = _get(url)
+    url  = _view_url(board_id, document_id)
+    html = _get_retry(url)
+    isempty(html) && return nothing
     doc  = _parse_html(html)
 
-    # 모바일 HTML: div.view-content
-    head = _query1(doc, "div.view-content")
+    # PC 갤러리: div.gallview_head.ub-content
+    head = _query1(doc, "div.gallview_head")
     head === nothing && return nothing
 
-    body_node = _query1(doc, "div.thum-txt")
+    # 본문 div
+    body_node = _query1(doc, "div.writing_view_box")
     body_node === nothing && return nothing
 
     # 제목
-    title_n = _query1(head, "h3.title span.tit")
-    title   = title_n === nothing ? "" : _text(title_n)
+    title_n = _query1(head, "h3.title span.title_subject")
+    title   = title_n === nothing ? "" : _innertext(title_n; sep=" ")
 
     # 작성자
-    writer_n  = _query1(head, "div.gall-detail-info")
+    writer_n  = _query1(head, "div.gall_writer")
     author    = ""
     author_id = nothing
     if writer_n !== nothing
-        nick  = _text(_query1(writer_n, "em.nick") !== nothing ?
-                      _query1(writer_n, "em.nick") : writer_n)
-        ip    = something(_attr(writer_n, "data-ip"), "")
+        nick  = something(_attr(writer_n, "data-nick"), "")
+        uid   = something(_attr(writer_n, "data-uid"),  "")
+        ip    = something(_attr(writer_n, "data-ip"),   "")
         author    = isempty(ip) ? nick : "$nick($ip)"
-        uid       = something(_attr(writer_n, "data-uid"), "")
         author_id = isempty(uid) ? nothing : uid
     end
 
-    # 시각
-    date_n   = _query1(head, "span.gall-date")
-    time_str = date_n === nothing ? "00:00" : _text(date_n)
+    # 시각: span.gall_date[title]
+    date_n   = _query1(head, "span.gall_date")
+    time_str = date_n === nothing ? "00:00" : begin
+        full = something(_attr(date_n, "title"), "")
+        isempty(full) ? strip(_innertext(date_n; sep=" ")) : full
+    end
     post_time = try _parse_time(time_str) catch; now() end
 
-    # 본문: body_node 에서 Lexbor.Node 로 변환 후 순회
-    bnode    = Lexbor.Node(body_node)
-    contents = strip(_text(bnode))
+    # 본문: body_node 를 직접 순회 (Lexbor.Node(node) 생성자는 Document 전용)
+    contents = strip(_innertext(body_node; sep=" "))
 
     # 이미지
     images = Image[]
-    for img in _query(doc, "div.thum-txt img")
+    for img in _query(doc, "div.writing_view_box img")
         src_orig = _attr(img, "data-original")
         src_fall = _attr(img, "src")
         src      = something(src_orig, src_fall)
@@ -496,19 +606,26 @@ function document(api::API, board_id::AbstractString, document_id::AbstractStrin
         push!(images, Image(src, document_id, board_id))
     end
 
-    # 조회수
-    view_n     = _query1(head, "span.gall-detail-hits")
-    view_count = view_n === nothing ? 0 :
-        something(tryparse(Int, filter(isdigit, _text(view_n))), 0)
+    # 조회수: span.gall_count "조회 N"
+    view_n     = _query1(head, "span.gall_count")
+    view_count = 0
+    if view_n !== nothing
+        vs = split(_innertext(view_n; sep=" "))
+        !isempty(vs) && (view_count = something(tryparse(Int, vs[end]), 0))
+    end
 
-    # 추천수
-    vote_n = _query1(head, "span.gall-detail-recommend")
-    voteup = vote_n === nothing ? 0 :
-        something(tryparse(Int, filter(isdigit, _text(vote_n))), 0)
+    # 추천수: span.gall_reply_num "추천 N"
+    vote_n   = _query1(head, "span.gall_reply_num")
+    voteup   = 0
+    if vote_n !== nothing
+        vs = split(_innertext(vote_n; sep=" "))
+        !isempty(vs) && (voteup = something(tryparse(Int, vs[end]), 0))
+    end
 
+    # votedown / logined_voteup: PC 갤러리에서는 별도 엔드포인트 (0 으로 초기화)
     votedown = 0
     logined  = 0
-    html_str = _text(bnode)
+    html_str = _innertext(body_node)
 
     Document(
         document_id, board_id, title, author, author_id,
@@ -529,11 +646,12 @@ PC 갤러리의 JSON 댓글 API 를 사용한다.
 내부적으로 글 본문 페이지에서 `e_s_n_o` 와 `_GALLTYPE_` 를 취득한다.
 """
 function comments(api::API, board_id::AbstractString, document_id::AbstractString;
-                  num::Int=−1, start_page::Int=1)::Channel{Comment}
+                  num::Int=-1, start_page::Int=1)::Channel{Comment}
 
-    Channel{Comment}(; csize=32) do ch
+    Channel{Comment}(32) do ch
         # 글 본문에서 댓글 API 필수 파라미터 취득
-        view_html = _get(_view_url(board_id, document_id))
+        view_html = _get_retry(_view_url(board_id, document_id))
+        isempty(view_html) && return
         view_doc  = _parse_html(view_html)
 
         esnon  = _query1(view_doc, "#e_s_n_o")
@@ -640,9 +758,9 @@ function write_comment(api::API, board_id::AbstractString, document_id::Abstract
     csrf_n     = _query1(doc, "meta[name='csrf-token']")
     csrf_token = csrf_n !== nothing ? something(_attr(csrf_n, "content"), "") : ""
     title_n    = _query1(doc, "span.tit")
-    title      = title_n !== nothing ? strip(_text(title_n)) : ""
+    title      = title_n !== nothing ? strip(_innertext(title_n; sep=" ")) : ""
     bnm_n      = _query1(doc, "a.gall-tit-lnk")
-    board_name = bnm_n !== nothing ? strip(_text(bnm_n)) : ""
+    board_name = bnm_n !== nothing ? strip(_innertext(bnm_n; sep=" ")) : ""
 
     con_key = _access("com_submit", url; require_conkey=false, csrf_token=csrf_token)
 
@@ -789,7 +907,7 @@ function remove_document(api::API, board_id::AbstractString, document_id::Abstra
     csrf_n = _query1(doc, "meta[name='csrf-token']")
     csrf   = csrf_n !== nothing ? something(_attr(csrf_n, "content"), "") : ""
     bnm_n  = _query1(doc, "a.gall-tit-lnk")
-    board_name = bnm_n !== nothing ? strip(_text(bnm_n)) : ""
+    board_name = bnm_n !== nothing ? strip(_innertext(bnm_n; sep=" ")) : ""
 
     con_key = _access("board_Del", url; require_conkey=false, csrf_token=csrf)
     payload = [
@@ -844,7 +962,7 @@ function _write_or_modify(api::API, board_id::AbstractString;
     csrf_n     = _query1(doc, "meta[name='csrf-token']")
     csrf       = csrf_n !== nothing ? something(_attr(csrf_n, "content"), "") : ""
     bnm_n      = _query1(doc, "a.gall-tit-lnk")
-    board_name = bnm_n !== nothing ? strip(_text(bnm_n)) : ""
+    board_name = bnm_n !== nothing ? strip(_innertext(bnm_n; sep=" ")) : ""
 
     con_key = _access("dc_check2", url; require_conkey=false, csrf_token=csrf)
 
