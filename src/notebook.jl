@@ -91,7 +91,10 @@ end
 end
 
 # ╔═╡ c03b12c8-ea24-4e68-a89a-a616db2b4798
-using PlutoUI
+begin
+	using PlutoUI
+	using DataFrames
+end
 
 # ╔═╡ d8b7dad9-867f-400d-87cc-e184d47f9880
 include("Dcinside.jl")
@@ -170,11 +173,11 @@ begin
 	const FRAME_VOCAB = Dict(
 		:gaming    => ["디버프", "스탯", "패널티", "약점", "너프", "능력치", "상태이상",
 		               "핸디캡", "제약", "쇠약", "디메리트", "마이너스"],
-		:catharsis => ["극복", "성장", "회복", "완치", "기적", "노력", "이겨냈", "딛고",
+		:catharsis => ["성장", "회복", "완치", "기적", "노력", "이겨냈", "딛고",
 		               "해냈", "역경", "강해", "각성"],
 		:sympathy  => ["불쌍", "감동", "안타깝", "가엾", "측은", "눈물", "비련",
 		               "가슴아프", "힘들", "애처롭", "불행", "고통"],
-		:critical  => ["재현", "고정관념", "클리셰", "차별", "편견", "서사", "비판",
+		:critical  => ["재현", "고정관념", "차별", "편견", "서사", "비판",
 		               "문제적", "혐오", "장애인식", "의료화", "감동포르노"],
 	)
 
@@ -267,15 +270,21 @@ begin
 	function classify_frame(text::AbstractString, vocab::Dict)::Symbol
 		scores = Dict(f => sum(count(t, text) for t in v) for (f, v) in vocab)
 		best   = maximum(values(scores))
-		best == 0 && return :none
+		best |> iszero && return :none
 		winners = [f for (f, s) in scores if s == best]
 		length(winners) == 1 ? only(winners) : :ambiguous
 	end
 
-	import DataFrames: transform!, ByRow, copy
-
 	corpus_nlp = let
 		df = copy(corpus_df)
+		# 플랫폼 공식 봇 계정 제거
+		filter!(r -> r.author != "댓글돌이", df)
+		# "불구하고/하여/하다" = "despite"(역접) 용례 제거 — 장애 의미의 "불구"만 유지
+		filter!(r -> r.keyword != "불구" || occursin(r"불구(?!하)", r.text), df)
+		# "실명제" = 實名制(금융 실명제) 용례 제거 — 失明(시력 상실) 의미의 "실명"만 유지
+		filter!(r -> r.keyword != "실명" || occursin(r"실명(?!제)", r.text), df)
+		# "활자폐기물" 등 활자+폐기물 합성어 내 "자폐" 제거 — 自閉(자폐증) 의미만 유지
+		filter!(r -> r.keyword != "자폐" || occursin(r"(?<!활)자폐", r.text), df)
 		transform!(df, :text => ByRow(t -> Kiwi.nouns(t))                      => :nouns)
 		transform!(df, :text => ByRow(t -> classify_frame(t, FRAME_VOCAB))     => :frame)
 		df
@@ -291,20 +300,35 @@ end
 """
 function kwic(df::DataFrame, keyword::AbstractString;
               window::Int=KWIC_WINDOW, n::Int=30)
-	results = NamedTuple[]
+	results  = NamedTuple[]
+	seen_pos = Set{Tuple{String,Int}}()   # (source_id, byte_offset) — 중복 제거
 	for row in eachrow(df)
 		text   = row.text
-		offset = 1
+		offset = firstindex(text)
 		while true
 			r = findnext(keyword, text, offset)
 			r === nothing && break
 			ks, ke = first(r), last(r)
-			ls  = max(1, ks - window)
-			re  = min(ncodeunits(text), ke + window)
-			left  = isvalid(text, ls) ? text[ls:prevind(text, ks)] :
-			        text[nextind(text, ls - 1):prevind(text, ks)]
-			right = isvalid(text, nextind(text, ke)) ?
-			        text[nextind(text, ke):re] : ""
+
+			# 동일 문서·동일 위치(다른 keyword 행으로 중복 수집된 경우) 스킵
+			pos_key = (row.source_id, ks)
+			pos_key in seen_pos && (offset = nextind(text, ke); continue)
+			push!(seen_pos, pos_key)
+
+			# prevind/nextind으로 문자 경계를 정확히 계산 (멀티바이트 안전)
+			# s[i:j] 는 i·j 모두 문자 시작 바이트여야 함
+			ls = max(firstindex(text), prevind(text, ks, window))
+			left = text[ls:prevind(text, ks)]
+
+			right_start = nextind(text, ke)
+			right = if right_start > ncodeunits(text)
+				""
+			else
+				re_raw = nextind(text, ke, window)   # window번째 문자의 시작 바이트
+				re     = re_raw <= ncodeunits(text) ? re_raw : lastindex(text)
+				text[right_start:re]
+			end
+
 			push!(results, (
 				left_context  = left,
 				keyword_hit   = keyword,
@@ -472,10 +496,14 @@ end
 # ╔═╡ aa000023-2301-4000-8000-000000000023
 @bind kwic_keyword Select(DISABILITY_KEYWORDS)
 
-# ╔═╡ aa000023b-2302-4000-8000-00000000002b
-let kwic_keyword
+# ╔═╡ aa000024-2401-4000-8000-000000000024
+# 키워드별 고빈도 공기 명사 Top-10
+@bind topn_keyword Select(DISABILITY_KEYWORDS)
+
+# ╔═╡ 2496d0f4-5b45-11f1-9781-0f03f23dfb35
+let
 	rows_df = kwic(corpus_nlp, kwic_keyword; n=30)
-	nrow(rows_df) == 0 && return md"검색 결과 없음"
+	nrow(rows_df) |> iszero && return md"검색 결과 없음"
 
 	data_rows = [@htl("""<tr style="border-bottom:1px solid #eee">
 		<td style="text-align:right;padding:4px 8px;color:#555;font-size:13px">$(r.left_context)</td>
@@ -498,12 +526,8 @@ let kwic_keyword
 	</div>""")
 end
 
-# ╔═╡ aa000024-2401-4000-8000-000000000024
-# 키워드별 고빈도 공기 명사 Top-10
-@bind topn_keyword Select(DISABILITY_KEYWORDS)
-
-# ╔═╡ aa000024b-2402-4000-8000-00000000002c
-let topn_keyword
+# ╔═╡ 2496d5fe-5b45-11f1-8cad-db3dae0703dd
+let
 	sub    = filter(r -> occursin(topn_keyword, r.text), eachrow(corpus_nlp))
 	all_n  = [n for r in sub for n in r.nouns]
 	counts = sort(collect(Dict(n => count(==(n), all_n) for n in unique(all_n))),
@@ -534,27 +558,27 @@ end
 
 # ╔═╡ Cell order:
 # ╟─a1f3c2d0-0001-4000-8000-000000000001
-# ╠═d8b7dad9-867f-400d-87cc-e184d47f9880
+# ╟─d8b7dad9-867f-400d-87cc-e184d47f9880
 # ╟─a43c857b-3162-49fb-9163-b25e6c93d6d2
 # ╟─d32c25d4-960c-475d-8c55-5daa238e2a8c
-# ╠═d9be15e6-11d4-4e56-af91-99a60befe7ef
-# ╠═c708a4f0-2482-4d84-94f7-cc734cc1a5c0
+# ╟─d9be15e6-11d4-4e56-af91-99a60befe7ef
+# ╟─c708a4f0-2482-4d84-94f7-cc734cc1a5c0
 # ╠═c03b12c8-ea24-4e68-a89a-a616db2b4798
-# ╠═448bc7e4-5fff-4f16-9c28-7070f51083df
-# ╠═fa9b0c1e-3d72-4a85-b6e8-2f5c8d1e0a34
-# ╠═9c9e951d-b26f-4469-a34e-befce57a9338
-# ╠═c1a2b3d4-e5f6-7890-abcd-ef1234567890
+# ╟─448bc7e4-5fff-4f16-9c28-7070f51083df
+# ╟─fa9b0c1e-3d72-4a85-b6e8-2f5c8d1e0a34
+# ╟─9c9e951d-b26f-4469-a34e-befce57a9338
+# ╟─c1a2b3d4-e5f6-7890-abcd-ef1234567890
 # ╟─aa000013-1301-4000-8000-000000000013
 # ╟─aa000014-1401-4000-8000-000000000014
-# ╠═aa000015-1501-4000-8000-000000000015
-# ╠═aa000016-1601-4000-8000-000000000016
+# ╟─aa000015-1501-4000-8000-000000000015
+# ╟─aa000016-1601-4000-8000-000000000016
 # ╟─aa000017-1701-4000-8000-000000000017
-# ╠═aa000018-1801-4000-8000-000000000018
-# ╠═aa000019-1901-4000-8000-000000000019
-# ╠═aa000020-2001-4000-8000-000000000020
-# ╠═aa000021-2101-4000-8000-000000000021
-# ╠═aa000022-2201-4000-8000-000000000022
+# ╟─aa000018-1801-4000-8000-000000000018
+# ╟─aa000019-1901-4000-8000-000000000019
+# ╟─aa000020-2001-4000-8000-000000000020
+# ╟─aa000021-2101-4000-8000-000000000021
+# ╟─aa000022-2201-4000-8000-000000000022
 # ╠═aa000023-2301-4000-8000-000000000023
-# ╠═aa000023b-2302-4000-8000-00000000002b
 # ╠═aa000024-2401-4000-8000-000000000024
-# ╠═aa000024b-2402-4000-8000-00000000002c
+# ╟─2496d0f4-5b45-11f1-9781-0f03f23dfb35
+# ╟─2496d5fe-5b45-11f1-8cad-db3dae0703dd
