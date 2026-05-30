@@ -270,7 +270,7 @@ begin
 	function classify_frame(text::AbstractString, vocab::Dict)::Symbol
 		scores = Dict(f => sum(count(t, text) for t in v) for (f, v) in vocab)
 		best   = maximum(values(scores))
-		best == 0 && return :none
+		best |> iszero && return :none
 		winners = [f for (f, s) in scores if s == best]
 		length(winners) == 1 ? only(winners) : :ambiguous
 	end
@@ -503,7 +503,7 @@ end
 # ╔═╡ 2496d0f4-5b45-11f1-9781-0f03f23dfb35
 let
 	rows_df = kwic(corpus_nlp, kwic_keyword; n=30)
-	nrow(rows_df) == 0 && return md"검색 결과 없음"
+	nrow(rows_df) |> iszero && return md"검색 결과 없음"
 
 	data_rows = [@htl("""<tr style="border-bottom:1px solid #eee">
 		<td style="text-align:right;padding:4px 8px;color:#555;font-size:13px">$(r.left_context)</td>
