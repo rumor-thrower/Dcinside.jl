@@ -64,13 +64,13 @@ end
     end
 
     # ── 2. 마이너 갤러리 글 1개 읽기 ────────────────────────
-    # 마이너 갤러리는 트래픽이 낮을 수 있으므로 24시간 허용
+    # 마이너 갤러리는 트래픽이 낮아 최신 글이 하루 이상 전일 수 있으므로 30일 허용
     @testset "마이너 갤러리(aoegame) 글 1개 읽기" begin
         ch  = board(api, "aoegame"; num=1)
         idx = take!(ch)
 
         check_index_fields(idx)
-        @test idx.time > now() - Hour(24)
+        @test idx.time > now() - Day(30)
         @test idx.time < now() + Hour(1)
     end
 
@@ -125,7 +125,7 @@ end
                 # 삭제/숨김 댓글(내용 없음)은 필드 검사 skip
                 comm.contents === nothing && comm.dccon === nothing && comm.voice === nothing && continue
                 check_comment_fields(comm)
-                @test comm.time > now() - Hour(24)
+                @test comm.time > now() - Day(30)
                 @test comm.time < now() + Hour(1)
             end
             break
@@ -180,7 +180,7 @@ end
         @test !isnothing(doc)
         if !isnothing(doc)
             check_doc_fields(doc)
-            @test doc.time > now() - Hour(24)
+            @test doc.time > now() - Day(30)
             @test doc.time < now() + Hour(1)
         end
     end
