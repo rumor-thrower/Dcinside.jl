@@ -187,102 +187,107 @@ begin
 end
 
 # ╔═╡ aa000014-1401-4000-8000-000000000014
-begin
-	# Helper function to update `rows` with post body if `doc` is valid. Checks if `doc` is not `nothing` and has non-empty `contents` before pushing a new row with `source_type` = :post_body. Returns the updated `rows`.
-	function _update_rows_with_doc(doc, idx, kw, rows)
-		if doc !== nothing && !isempty(doc.contents)
+module Corpus
+
+import DataFrames
+import ..Dcinside
+
+# Helper function to update `rows` with post body if `doc` is valid. Checks if `doc` is not `nothing` and has non-empty `contents` before pushing a new row with `source_type` = :post_body. Returns the updated `rows`.
+function _update_rows_with_doc(doc, idx, kw, rows)
+	if doc !== nothing && !isempty(doc.contents)
+		push!(rows, (
+			source_id   = idx.id * "_body",
+			doc_id      = idx.id,
+			keyword     = kw,
+			source_type = :post_body,
+			text        = doc.contents,
+			author      = idx.author,
+			timestamp   = idx.time,
+			view_count  = idx.view_count,
+			voteup      = idx.voteup_count,
+		))
+	end
+	return rows
+end
+
+# Handle full text if `fetch_fulltext` is true, updating `rows` with post body. Uses helper function `_update_rows_with_doc` to keep main function cleaner.
+function _handle_document(fetch_fulltext, idx, kw, rows)
+	if fetch_fulltext
+		doc = idx.document()
+		rows = _update_rows_with_doc(doc, idx, kw, rows)
+	end
+	return rows
+end
+
+# Handle comments if `fetch_comments` is true, appending to `rows`. Each comment gets a unique `source_id` (e.g. "postid_commentid") and `source_type` = :comment.
+function _handle_comments(fetch_comments, idx, kw, rows)
+	if fetch_comments
+		for c in idx.comments()
+			c.contents === nothing && continue
 			push!(rows, (
-				source_id   = idx.id * "_body",
+				source_id   = c.id,
 				doc_id      = idx.id,
 				keyword     = kw,
-				source_type = :post_body,
-				text        = doc.contents,
+				source_type = :comment,
+				text        = c.contents,
+				author      = c.author,
+				timestamp   = c.time,
+				view_count  = 0,
+				voteup      = 0,
+			))
+		end
+	end
+	return rows
+end
+
+"""
+	collect_corpus(api, board_id, keywords; posts_per_keyword, fetch_fulltext, fetch_comments)
+	-> DataFrame
+
+각 키워드로 `search_board → document → comments` 순 수집.
+
+반환 열: `source_id`, `doc_id`, `keyword`, `source_type` (:post_title/:post_body/:comment),
+		 `text`, `author`, `timestamp`, `view_count`, `voteup`
+"""
+function collect(api, board_id, keywords;
+						posts_per_keyword::Int=20,
+						fetch_fulltext::Bool=true,
+						fetch_comments::Bool=true)
+	rows     = NamedTuple[]
+	seen_ids = Set{String}()
+	for kw in keywords
+		for idx in Dcinside.search_board(api, board_id, kw; num=posts_per_keyword)
+			push!(rows, (
+				source_id   = idx.id,
+				doc_id      = idx.id,
+				keyword     = kw,
+				source_type = :post_title,
+				text        = idx.title,
 				author      = idx.author,
 				timestamp   = idx.time,
 				view_count  = idx.view_count,
 				voteup      = idx.voteup_count,
 			))
-		end
-		return rows
-	end
+			idx.id in seen_ids && continue
+			push!(seen_ids, idx.id)
 
-	# Handle full text if `fetch_fulltext` is true, updating `rows` with post body. Uses helper function `_update_rows_with_doc` to keep main function cleaner.
-	function _handle_document(fetch_fulltext, idx, kw, rows)
-		if fetch_fulltext
-			doc = idx.document()
-			rows = _update_rows_with_doc(doc, idx, kw, rows)
-		end
-		return rows
-	end
+			# How to refactor if block not in start of function? — early continue + guard clause pattern
+			rows = _handle_document(fetch_fulltext, idx, kw, rows)
 
-	# Handle comments if `fetch_comments` is true, appending to `rows`. Each comment gets a unique `source_id` (e.g. "postid_commentid") and `source_type` = :comment.
-	function _handle_comments(fetch_comments, idx, kw, rows)
-		if fetch_comments
-			for c in idx.comments()
-				c.contents === nothing && continue
-				push!(rows, (
-					source_id   = c.id,
-					doc_id      = idx.id,
-					keyword     = kw,
-					source_type = :comment,
-					text        = c.contents,
-					author      = c.author,
-					timestamp   = c.time,
-					view_count  = 0,
-					voteup      = 0,
-				))
-			end
+			# name of the function to replace if blocks: handle_comments
+			rows = _handle_comments(fetch_comments, idx, kw, rows)
 		end
-		return rows
 	end
+	DataFrame(rows)
+end
 
-	"""
-	    collect_corpus(api, board_id, keywords; posts_per_keyword, fetch_fulltext, fetch_comments)
-	    -> DataFrame
-	
-	각 키워드로 `search_board → document → comments` 순 수집.
-	
-	반환 열: `source_id`, `doc_id`, `keyword`, `source_type` (:post_title/:post_body/:comment),
-	         `text`, `author`, `timestamp`, `view_count`, `voteup`
-	"""
-	function collect_corpus(api, board_id, keywords;
-	                        posts_per_keyword::Int=20,
-	                        fetch_fulltext::Bool=true,
-	                        fetch_comments::Bool=true)
-		rows     = NamedTuple[]
-		seen_ids = Set{String}()
-		for kw in keywords
-			for idx in Dcinside.search_board(api, board_id, kw; num=posts_per_keyword)
-				push!(rows, (
-					source_id   = idx.id,
-					doc_id      = idx.id,
-					keyword     = kw,
-					source_type = :post_title,
-					text        = idx.title,
-					author      = idx.author,
-					timestamp   = idx.time,
-					view_count  = idx.view_count,
-					voteup      = idx.voteup_count,
-				))
-				idx.id in seen_ids && continue
-				push!(seen_ids, idx.id)
-	
-				# How to refactor if block not in start of function? — early continue + guard clause pattern
-				rows = _handle_document(fetch_fulltext, idx, kw, rows)
-	
-				# name of the function to replace if blocks: handle_comments
-				rows = _handle_comments(fetch_comments, idx, kw, rows)
-			end
-		end
-		DataFrame(rows)
-	end
 end
 
 # ╔═╡ aa000015-1501-4000-8000-000000000015
 # 키워드 8개 × 20게시글 × (본문+댓글 포함) ≈ 요청 ~500회 × 1.5s ≈ 12~15분
 corpus_df = let time
 	@info "코퍼스 수집 시작..."
-	df = collect_corpus(api, gallery_name, DISABILITY_KEYWORDS; posts_per_keyword=20)
+	df = Corpus.collect(api, gallery_name, DISABILITY_KEYWORDS; posts_per_keyword=20)
 	@info "수집 완료" nrow=nrow(df)
 	df
 end
@@ -591,7 +596,7 @@ end
 # ╟─9c9e951d-b26f-4469-a34e-befce57a9338
 # ╟─c1a2b3d4-e5f6-7890-abcd-ef1234567890
 # ╟─aa000013-1301-4000-8000-000000000013
-# ╠═aa000014-1401-4000-8000-000000000014
+# ╟─aa000014-1401-4000-8000-000000000014
 # ╟─aa000015-1501-4000-8000-000000000015
 # ╟─aa000016-1601-4000-8000-000000000016
 # ╟─aa000017-1701-4000-8000-000000000017
