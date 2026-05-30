@@ -4,6 +4,18 @@
 using Markdown
 using InteractiveUtils
 
+# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
+macro bind(def, element)
+    #! format: off
+    return quote
+        local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
+        local el = $(esc(element))
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
+        el
+    end
+    #! format: on
+end
+
 # ╔═╡ a1f3c2d0-0001-4000-8000-000000000001
 begin
     import Pkg
@@ -78,6 +90,9 @@ end
 
 end
 
+# ╔═╡ c03b12c8-ea24-4e68-a89a-a616db2b4798
+using PlutoUI
+
 # ╔═╡ d8b7dad9-867f-400d-87cc-e184d47f9880
 include("Dcinside.jl")
 
@@ -124,8 +139,13 @@ const api = Dcinside.API()
 # ╔═╡ c708a4f0-2482-4d84-94f7-cc734cc1a5c0
 const gallery_name = "genrenovel"
 
+# ╔═╡ 448bc7e4-5fff-4f16-9c28-7070f51083df
+@bind time Clock()
+
 # ╔═╡ fa9b0c1e-3d72-4a85-b6e8-2f5c8d1e0a34
-trigger = Kiwi.load_user_dict!(joinpath(@__DIR__, "user_dict.dict"))
+let time
+	Kiwi.load_user_dict!(joinpath(@__DIR__, "user_dict.dict"))
+end
 
 # ╔═╡ 9c9e951d-b26f-4469-a34e-befce57a9338
 let ch = Dcinside.board(api, gallery_name; num=5)
@@ -134,11 +154,382 @@ end
 
 # ╔═╡ c1a2b3d4-e5f6-7890-abcd-ef1234567890
 # title 열 → Kiwi 형태소 분석 (명사 추출) → id·title·morphemes 열만 출력
-let trigger
+let time
 	ch = Dcinside.board(api, gallery_name; num=10)
 	df = DcinsideDataFrames.to_dataframe(ch)
 	DcinsideDataFrames.parse_titles!(df, Kiwi.nouns)
 	df[!, [:id, :title, :morphemes]]
+end
+
+# ╔═╡ aa000013-1301-4000-8000-000000000013
+begin
+	using HypertextLiteral
+
+	const DISABILITY_KEYWORDS = ["장애", "불구", "실명", "자폐", "치료", "극복", "클리셰", "영구 장애"]
+
+	const FRAME_VOCAB = Dict(
+		:gaming    => ["디버프", "스탯", "패널티", "약점", "너프", "능력치", "상태이상",
+		               "핸디캡", "제약", "쇠약", "디메리트", "마이너스"],
+		:catharsis => ["극복", "성장", "회복", "완치", "기적", "노력", "이겨냈", "딛고",
+		               "해냈", "역경", "강해", "각성"],
+		:sympathy  => ["불쌍", "감동", "안타깝", "가엾", "측은", "눈물", "비련",
+		               "가슴아프", "힘들", "애처롭", "불행", "고통"],
+		:critical  => ["재현", "고정관념", "클리셰", "차별", "편견", "서사", "비판",
+		               "문제적", "혐오", "장애인식", "의료화", "감동포르노"],
+	)
+
+	const KWIC_WINDOW = 40
+	const OUTPUT_DIR  = let d = joinpath(@__DIR__, "..", "output"); mkpath(d); d end
+	md"상수 정의 완료 — 키워드 $(length(DISABILITY_KEYWORDS))개, 프레임 $(length(FRAME_VOCAB))종 | 출력: $(OUTPUT_DIR)"
+end
+
+# ╔═╡ aa000014-1401-4000-8000-000000000014
+"""
+    collect_corpus(api, board_id, keywords; posts_per_keyword, fetch_fulltext, fetch_comments)
+    -> DataFrame
+
+각 키워드로 `search_board → document → comments` 순 수집.
+
+반환 열: `source_id`, `doc_id`, `keyword`, `source_type` (:post_title/:post_body/:comment),
+         `text`, `author`, `timestamp`, `view_count`, `voteup`
+"""
+function collect_corpus(api, board_id, keywords;
+                        posts_per_keyword::Int=20,
+                        fetch_fulltext::Bool=true,
+                        fetch_comments::Bool=true)
+	rows     = NamedTuple[]
+	seen_ids = Set{String}()
+	for kw in keywords
+		for idx in Dcinside.search_board(api, board_id, kw; num=posts_per_keyword)
+			push!(rows, (
+				source_id   = idx.id,
+				doc_id      = idx.id,
+				keyword     = kw,
+				source_type = :post_title,
+				text        = idx.title,
+				author      = idx.author,
+				timestamp   = idx.time,
+				view_count  = idx.view_count,
+				voteup      = idx.voteup_count,
+			))
+			idx.id in seen_ids && continue
+			push!(seen_ids, idx.id)
+
+			if fetch_fulltext
+				doc = idx.document()
+				if doc !== nothing && !isempty(doc.contents)
+					push!(rows, (
+						source_id   = idx.id * "_body",
+						doc_id      = idx.id,
+						keyword     = kw,
+						source_type = :post_body,
+						text        = doc.contents,
+						author      = idx.author,
+						timestamp   = idx.time,
+						view_count  = idx.view_count,
+						voteup      = idx.voteup_count,
+					))
+				end
+			end
+
+			if fetch_comments
+				for c in idx.comments()
+					c.contents === nothing && continue
+					push!(rows, (
+						source_id   = c.id,
+						doc_id      = idx.id,
+						keyword     = kw,
+						source_type = :comment,
+						text        = c.contents,
+						author      = c.author,
+						timestamp   = c.time,
+						view_count  = 0,
+						voteup      = 0,
+					))
+				end
+			end
+		end
+	end
+	DataFrame(rows)
+end
+
+# ╔═╡ aa000015-1501-4000-8000-000000000015
+# 키워드 8개 × 20게시글 × (본문+댓글 포함) ≈ 요청 ~500회 × 1.5s ≈ 12~15분
+corpus_df = let time
+	@info "코퍼스 수집 시작..."
+	df = collect_corpus(api, gallery_name, DISABILITY_KEYWORDS; posts_per_keyword=20)
+	@info "수집 완료" nrow=nrow(df)
+	df
+end
+
+# ╔═╡ aa000016-1601-4000-8000-000000000016
+begin
+	function classify_frame(text::AbstractString, vocab::Dict)::Symbol
+		scores = Dict(f => sum(count(t, text) for t in v) for (f, v) in vocab)
+		best   = maximum(values(scores))
+		best == 0 && return :none
+		winners = [f for (f, s) in scores if s == best]
+		length(winners) == 1 ? only(winners) : :ambiguous
+	end
+
+	import DataFrames: transform!, ByRow, copy
+
+	corpus_nlp = let
+		df = copy(corpus_df)
+		transform!(df, :text => ByRow(t -> Kiwi.nouns(t))                      => :nouns)
+		transform!(df, :text => ByRow(t -> classify_frame(t, FRAME_VOCAB))     => :frame)
+		df
+	end
+end
+
+# ╔═╡ aa000017-1701-4000-8000-000000000017
+"""
+    kwic(df, keyword; window, n) -> DataFrame
+
+키워드 주변 문맥(KWIC) 추출.
+반환 열: `left_context`, `keyword_hit`, `right_context`, `source_type`, `doc_id`, `search_kw`
+"""
+function kwic(df::DataFrame, keyword::AbstractString;
+              window::Int=KWIC_WINDOW, n::Int=30)
+	results = NamedTuple[]
+	for row in eachrow(df)
+		text   = row.text
+		offset = 1
+		while true
+			r = findnext(keyword, text, offset)
+			r === nothing && break
+			ks, ke = first(r), last(r)
+			ls  = max(1, ks - window)
+			re  = min(ncodeunits(text), ke + window)
+			left  = isvalid(text, ls) ? text[ls:prevind(text, ks)] :
+			        text[nextind(text, ls - 1):prevind(text, ks)]
+			right = isvalid(text, nextind(text, ke)) ?
+			        text[nextind(text, ke):re] : ""
+			push!(results, (
+				left_context  = left,
+				keyword_hit   = keyword,
+				right_context = right,
+				source_type   = row.source_type,
+				doc_id        = row.doc_id,
+				search_kw     = row.keyword,
+			))
+			length(results) >= n && @goto kwic_done
+			offset = nextind(text, ke)
+		end
+	end
+	@label kwic_done
+	DataFrame(results)
+end
+
+# ╔═╡ aa000018-1801-4000-8000-000000000018
+begin
+	"""
+	    cooccurrence_matrix(df, dis_kws, frame_vocab) -> DataFrame
+
+	행: 장애 키워드, 열: 프레임명.
+	값 = 해당 텍스트에서 장애 키워드와 프레임 어휘가 함께 등장한 행 수.
+	"""
+	function cooccurrence_matrix(df::DataFrame,
+	                              dis_kws::Vector{String},
+	                              frame_vocab::Dict)
+		frames = sort(collect(keys(frame_vocab)))
+		rows = map(dis_kws) do dkw
+			sub = filter(r -> occursin(dkw, r.text), eachrow(df))
+			counts = Dict(
+				f => count(r -> any(occursin(t, r.text) for t in frame_vocab[f]), sub)
+				for f in frames
+			)
+			merge((; keyword=dkw), NamedTuple(sort(collect(counts))))
+		end
+		DataFrame(rows)
+	end
+
+	cooc_df = cooccurrence_matrix(corpus_nlp, DISABILITY_KEYWORDS, FRAME_VOCAB)
+end
+
+# ╔═╡ aa000019-1901-4000-8000-000000000019
+# 키워드 빈도 막대 차트
+let
+	freq  = sort(combine(groupby(corpus_nlp, :keyword), nrow => :n), :n; rev=true)
+	labels = freq.keyword
+	vals   = freq.n
+	max_v  = max(maximum(vals), 1)
+	W, H   = 620, 280
+	bar_w  = (W - 80) ÷ length(labels)
+
+	rects = join(["""<g>
+	  <rect x="$(60+(i-1)*bar_w)" y="$(H-50-round(Int,v/max_v*180))"
+	        width="$(bar_w-4)" height="$(round(Int,v/max_v*180))" fill="#4e79a7" rx="2"/>
+	  <text x="$(60+(i-1)*bar_w+bar_w÷2)" y="$(H-32)"
+	        text-anchor="middle" font-size="12">$(labels[i])</text>
+	  <text x="$(60+(i-1)*bar_w+bar_w÷2)" y="$(H-54-round(Int,v/max_v*180))"
+	        text-anchor="middle" font-size="11" fill="#333">$(v)</text>
+	</g>""" for (i,v) in enumerate(vals)], "\n")
+
+	svg = """<svg xmlns="http://www.w3.org/2000/svg" width="$W" height="$H" style="font-family:sans-serif;overflow:visible">$rects</svg>"""
+	write(joinpath(OUTPUT_DIR, "01_keyword_freq.svg"), svg)
+	HTML("""<div><h4 style="font-family:sans-serif;margin:8px 0">키워드별 수집 행 수 (제목·본문·댓글 합산)</h4>$svg</div>""")
+end
+
+# ╔═╡ aa000020-2001-4000-8000-000000000020
+# 프레임 분포 막대 차트
+let
+	frame_order = [:gaming, :catharsis, :sympathy, :critical, :ambiguous, :none]
+	frame_color = Dict(
+		:gaming    => "#e15759",
+		:catharsis => "#f28e2b",
+		:sympathy  => "#59a14f",
+		:critical  => "#4e79a7",
+		:ambiguous => "#bab0ac",
+		:none      => "#d3d3d3",
+	)
+	counts    = combine(groupby(corpus_nlp, :frame), nrow => :n)
+	count_map = Dict(r.frame => r.n for r in eachrow(counts))
+	present   = [(string(f), get(count_map, f, 0), frame_color[f])
+	             for f in frame_order if get(count_map, f, 0) > 0]
+
+	if isempty(present)
+		HTML("<p style='font-family:sans-serif'>데이터 없음</p>")
+	else
+		max_v = max(maximum(x[2] for x in present), 1)
+		W, H  = 560, 280
+		bar_w = (W - 80) ÷ length(present)
+
+		rects = join(["""<g>
+		  <rect x="$(60+(i-1)*bar_w)" y="$(H-50-round(Int,v/max_v*180))"
+		        width="$(bar_w-6)" height="$(round(Int,v/max_v*180))" fill="$c" rx="2"/>
+		  <text x="$(60+(i-1)*bar_w+(bar_w-6)÷2)" y="$(H-32)"
+		        text-anchor="middle" font-size="12">$l</text>
+		  <text x="$(60+(i-1)*bar_w+(bar_w-6)÷2)" y="$(H-54-round(Int,v/max_v*180))"
+		        text-anchor="middle" font-size="11" fill="#333">$v</text>
+		</g>""" for (i,(l,v,c)) in enumerate(present)], "\n")
+
+		svg = """<svg xmlns="http://www.w3.org/2000/svg" width="$W" height="$H" style="font-family:sans-serif;overflow:visible">$rects</svg>"""
+		write(joinpath(OUTPUT_DIR, "02_frame_dist.svg"), svg)
+		HTML("""<div><h4 style="font-family:sans-serif;margin:8px 0">프레임 분포</h4>$svg</div>""")
+	end
+end
+
+# ╔═╡ aa000021-2101-4000-8000-000000000021
+# 공기어 히트맵 — 값이 클수록 배경색 진하게
+let
+	frames  = [:gaming, :catharsis, :sympathy, :critical]
+	max_val = max(maximum(maximum(cooc_df[!, f]) for f in frames), 1)
+
+	cell_bg(v) = let
+		i = round(Int, (1 - v/max_val) * 220)
+		c = string(i, base=16, pad=2)
+		"background:#$(c)$(c)ff;padding:6px 12px;text-align:center;font-size:13px"
+	end
+
+	header = join(["<th style='padding:6px 12px;background:#f0f0f0'>$f</th>" for f in frames])
+	rows   = join(["<tr><td style='padding:6px 10px;font-weight:bold;background:#f8f8f8'>$(row.keyword)</td>" *
+	               join(["<td style='$(cell_bg(row[f]))'>$(row[f])</td>" for f in frames]) *
+	               "</tr>" for row in eachrow(cooc_df)])
+	table  = """<table style="border-collapse:collapse;font-family:sans-serif">
+	  <thead><tr><th style="padding:6px 10px;background:#f0f0f0">키워드</th>$header</tr></thead>
+	  <tbody>$rows</tbody></table>"""
+
+	write(joinpath(OUTPUT_DIR, "03_cooc_heatmap.html"), """<!DOCTYPE html>
+	<html><head><meta charset="utf-8"></head><body>
+	<h3 style="font-family:sans-serif">장애 키워드 × 프레임 공기어 히트맵</h3>
+	<p style="font-size:12px;color:#666;font-family:sans-serif">진할수록 공기어 빈도 높음</p>
+	$table</body></html>""")
+
+	HTML("""<div>
+		<h4 style="font-family:sans-serif;margin:8px 0">장애 키워드 × 프레임 공기어 히트맵</h4>
+		<p style="font-size:12px;color:#666;font-family:sans-serif">진할수록 공기어 빈도 높음</p>
+		$table
+	</div>""")
+end
+
+# ╔═╡ aa000022-2201-4000-8000-000000000022
+# 비판 프레임 부재 강조
+let
+	critical_n    = count(r -> r.frame == :critical, eachrow(corpus_nlp))
+	noncritical_n = count(r -> r.frame in (:gaming, :catharsis, :sympathy), eachrow(corpus_nlp))
+	labels = ["비판적 담론", "비비판적 담론 합계"]
+	vals   = [critical_n, noncritical_n]
+	colors = ["#4e79a7", "#e15759"]
+	max_v  = max(maximum(vals), 1)
+	W, H   = 360, 260
+	bar_w  = (W - 80) ÷ 2
+
+	rects = join(["""<g>
+	  <rect x="$(60+(i-1)*(bar_w+10))" y="$(H-50-round(Int,v/max_v*160))"
+	        width="$bar_w" height="$(round(Int,v/max_v*160))" fill="$(colors[i])" rx="2"/>
+	  <text x="$(60+(i-1)*(bar_w+10)+bar_w÷2)" y="$(H-30)"
+	        text-anchor="middle" font-size="12">$(labels[i])</text>
+	  <text x="$(60+(i-1)*(bar_w+10)+bar_w÷2)" y="$(H-54-round(Int,v/max_v*160))"
+	        text-anchor="middle" font-size="13" font-weight="bold">$v</text>
+	</g>""" for (i,v) in enumerate(vals)], "\n")
+
+	svg = """<svg xmlns="http://www.w3.org/2000/svg" width="$W" height="$H" style="font-family:sans-serif;overflow:visible">$rects</svg>"""
+	write(joinpath(OUTPUT_DIR, "04_critical_absence.svg"), svg)
+	HTML("""<div><h4 style="font-family:sans-serif;margin:8px 0">비판적 담론 부재 시각화</h4>$svg</div>""")
+end
+
+# ╔═╡ aa000023-2301-4000-8000-000000000023
+@bind kwic_keyword Select(DISABILITY_KEYWORDS)
+
+# ╔═╡ aa000023b-2302-4000-8000-00000000002b
+let kwic_keyword
+	rows_df = kwic(corpus_nlp, kwic_keyword; n=30)
+	nrow(rows_df) == 0 && return md"검색 결과 없음"
+
+	data_rows = [@htl("""<tr style="border-bottom:1px solid #eee">
+		<td style="text-align:right;padding:4px 8px;color:#555;font-size:13px">$(r.left_context)</td>
+		<td style="font-weight:bold;color:#c0392b;padding:4px 4px;white-space:nowrap;font-size:13px">$(r.keyword_hit)</td>
+		<td style="padding:4px 8px;color:#555;font-size:13px">$(r.right_context)</td>
+		<td style="padding:4px 8px;font-size:11px;color:#888">$(r.source_type)</td>
+	</tr>""") for r in eachrow(rows_df)]
+
+	@htl("""<div>
+		<h4 style="font-family:sans-serif;margin:8px 0">KWIC — <span style="color:#c0392b">$(kwic_keyword)</span></h4>
+		<table style="border-collapse:collapse;font-family:sans-serif;max-width:900px">
+		  <thead><tr style="background:#f5f5f5">
+		    <th style="padding:4px 8px;text-align:right;font-size:12px">좌측 문맥</th>
+		    <th style="padding:4px 4px;font-size:12px">키워드</th>
+		    <th style="padding:4px 8px;font-size:12px">우측 문맥</th>
+		    <th style="padding:4px 8px;font-size:12px">유형</th>
+		  </tr></thead>
+		  <tbody>$(data_rows)</tbody>
+		</table>
+	</div>""")
+end
+
+# ╔═╡ aa000024-2401-4000-8000-000000000024
+# 키워드별 고빈도 공기 명사 Top-10
+@bind topn_keyword Select(DISABILITY_KEYWORDS)
+
+# ╔═╡ aa000024b-2402-4000-8000-00000000002c
+let topn_keyword
+	sub    = filter(r -> occursin(topn_keyword, r.text), eachrow(corpus_nlp))
+	all_n  = [n for r in sub for n in r.nouns]
+	counts = sort(collect(Dict(n => count(==(n), all_n) for n in unique(all_n))),
+	              by=x -> -x[2])
+	top10  = first(counts, 10)
+	isempty(top10) && return md"명사 없음"
+
+	rows_html = [@htl("""<tr style="border-bottom:1px solid #eee">
+		<td style="padding:4px 16px;font-size:14px">$i</td>
+		<td style="padding:4px 16px;font-size:14px;font-weight:bold">$(p[1])</td>
+		<td style="padding:4px 16px;font-size:14px">$(p[2])</td>
+	</tr>""") for (i, p) in enumerate(top10)]
+
+	@htl("""<div>
+		<h4 style="font-family:sans-serif;margin:8px 0">
+		  「$(topn_keyword)」 주변 고빈도 명사 Top-$(length(top10))
+		</h4>
+		<table style="border-collapse:collapse;font-family:sans-serif">
+		  <thead><tr style="background:#f5f5f5">
+		    <th style="padding:4px 16px;font-size:12px">순위</th>
+		    <th style="padding:4px 16px;font-size:12px">명사</th>
+		    <th style="padding:4px 16px;font-size:12px">빈도</th>
+		  </tr></thead>
+		  <tbody>$(rows_html)</tbody>
+		</table>
+	</div>""")
 end
 
 # ╔═╡ Cell order:
@@ -148,6 +539,22 @@ end
 # ╟─d32c25d4-960c-475d-8c55-5daa238e2a8c
 # ╠═d9be15e6-11d4-4e56-af91-99a60befe7ef
 # ╠═c708a4f0-2482-4d84-94f7-cc734cc1a5c0
+# ╠═c03b12c8-ea24-4e68-a89a-a616db2b4798
+# ╠═448bc7e4-5fff-4f16-9c28-7070f51083df
 # ╠═fa9b0c1e-3d72-4a85-b6e8-2f5c8d1e0a34
 # ╠═9c9e951d-b26f-4469-a34e-befce57a9338
 # ╠═c1a2b3d4-e5f6-7890-abcd-ef1234567890
+# ╟─aa000013-1301-4000-8000-000000000013
+# ╟─aa000014-1401-4000-8000-000000000014
+# ╠═aa000015-1501-4000-8000-000000000015
+# ╠═aa000016-1601-4000-8000-000000000016
+# ╟─aa000017-1701-4000-8000-000000000017
+# ╠═aa000018-1801-4000-8000-000000000018
+# ╠═aa000019-1901-4000-8000-000000000019
+# ╠═aa000020-2001-4000-8000-000000000020
+# ╠═aa000021-2101-4000-8000-000000000021
+# ╠═aa000022-2201-4000-8000-000000000022
+# ╠═aa000023-2301-4000-8000-000000000023
+# ╠═aa000023b-2302-4000-8000-00000000002b
+# ╠═aa000024-2401-4000-8000-000000000024
+# ╠═aa000024b-2402-4000-8000-00000000002c
