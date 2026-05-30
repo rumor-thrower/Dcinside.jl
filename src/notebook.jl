@@ -302,16 +302,19 @@ begin
 		length(winners) == 1 ? only(winners) : :ambiguous
 	end
 
+	# 동음이의 용례 제거: 각 (키워드, 패턴) 쌍에 대해 키워드 행 중 패턴 불일치 행을 제거
+	filter_keyword_sense!(df, kw_patterns) =
+		(foreach(((kw, pat),) -> filter!(r -> r.keyword != kw || occursin(pat, r.text), df), kw_patterns); df)
+
 	corpus_nlp = let
 		df = copy(corpus_df)
 		# 플랫폼 공식 봇 계정 제거
 		filter!(r -> r.author != "댓글돌이", df)
-		# "불구하고/하여/하다" = "despite"(역접) 용례 제거 — 장애 의미의 "불구"만 유지
-		filter!(r -> r.keyword != "불구" || occursin(r"불구(?!하)", r.text), df)
-		# "실명제" = 實名制(금융 실명제) 용례 제거 — 失明(시력 상실) 의미의 "실명"만 유지
-		filter!(r -> r.keyword != "실명" || occursin(r"실명(?!제)", r.text), df)
-		# "활자폐기물" 등 활자+폐기물 합성어 내 "자폐" 제거 — 自閉(자폐증) 의미만 유지
-		filter!(r -> r.keyword != "자폐" || occursin(r"(?<!활)자폐", r.text), df)
+		filter_keyword_sense!(df, [
+			("불구", r"불구(?!하)"),   # "불구하고/하여/하다"(역접) 제거 — 장애 의미만 유지
+			("실명", r"실명(?!제)"),   # "실명제"(금융 실명제) 제거 — 失明(시력 상실)만 유지
+			("자폐", r"(?<!활)자폐"), # "활자폐기물" 등 합성어 제거 — 自閉(자폐증)만 유지
+		])
 		transform!(df, :text => ByRow(t -> Kiwi.nouns(t))                      => :nouns)
 		transform!(df, :text => ByRow(t -> classify_frame(t, FRAME_VOCAB))     => :frame)
 		df
