@@ -229,17 +229,17 @@ _comment_row(c, idx, kw) = (
 	voteup      = 0,
 )
 
-function _update_rows_with_doc(doc, idx, kw, rows)
+function _update_rows_with_doc!(doc, idx, kw, rows)
 	(isnothing(doc) || isempty(doc.contents)) && return
 	push!(rows, _doc_row(doc, idx, kw))
 end
 
-function _handle_document(fetch_fulltext, idx, kw, rows)
+function _handle_document!(fetch_fulltext, idx, kw, rows)
 	fetch_fulltext || return
-	_update_rows_with_doc(idx.document(), idx, kw, rows)
+	_update_rows_with_doc!(idx.document(), idx, kw, rows)
 end
 
-function _handle_comments(fetch_comments, idx, kw, rows)
+function _handle_comments!(fetch_comments, idx, kw, rows)
 	fetch_comments || return
 	comments = Iterators.filter(c -> c.contents !== nothing, idx.comments())
 	for c in comments
@@ -281,8 +281,8 @@ function collect(Dcinside::Module, api, board_id, keywords;
 			push!(rows, _title_row(idx, kw))
 			idx.id in seen_ids && continue
 			push!(seen_ids, idx.id)
-			_handle_document(fetch_fulltext, idx, kw, rows)
-			_handle_comments(fetch_comments, idx, kw, rows)
+			_handle_document!(fetch_fulltext, idx, kw, rows)
+			_handle_comments!(fetch_comments, idx, kw, rows)
 		end
 	end
 	DataFrame(rows)
