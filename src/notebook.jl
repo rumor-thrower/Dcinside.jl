@@ -205,52 +205,42 @@ module Corpus
 
 using DataFrames
 
-# Helper function to update `rows` with post body if `doc` is valid. Checks if `doc` is not `nothing` and has non-empty `contents` before pushing a new row with `source_type` = :post_body. Returns the updated `rows`.
 function _update_rows_with_doc(doc, idx, kw, rows)
-	if doc !== nothing && !isempty(doc.contents)
+	(isnothing(doc) || isempty(doc.contents)) && return
+	push!(rows, (
+		source_id   = idx.id * "_body",
+		doc_id      = idx.id,
+		keyword     = kw,
+		source_type = :post_body,
+		text        = doc.contents,
+		author      = idx.author,
+		timestamp   = idx.time,
+		view_count  = idx.view_count,
+		voteup      = idx.voteup_count,
+	))
+end
+
+function _handle_document(fetch_fulltext, idx, kw, rows)
+	fetch_fulltext || return
+	_update_rows_with_doc(idx.document(), idx, kw, rows)
+end
+
+function _handle_comments(fetch_comments, idx, kw, rows)
+	fetch_comments || return
+	for c in idx.comments()
+		c.contents === nothing && continue
 		push!(rows, (
-			source_id   = idx.id * "_body",
+			source_id   = c.id,
 			doc_id      = idx.id,
 			keyword     = kw,
-			source_type = :post_body,
-			text        = doc.contents,
-			author      = idx.author,
-			timestamp   = idx.time,
-			view_count  = idx.view_count,
-			voteup      = idx.voteup_count,
+			source_type = :comment,
+			text        = c.contents,
+			author      = c.author,
+			timestamp   = c.time,
+			view_count  = 0,
+			voteup      = 0,
 		))
 	end
-	return rows
-end
-
-# Handle full text if `fetch_fulltext` is true, updating `rows` with post body. Uses helper function `_update_rows_with_doc` to keep main function cleaner.
-function _handle_document(fetch_fulltext, idx, kw, rows)
-	if fetch_fulltext
-		doc = idx.document()
-		rows = _update_rows_with_doc(doc, idx, kw, rows)
-	end
-	return rows
-end
-
-# Handle comments if `fetch_comments` is true, appending to `rows`. Each comment gets a unique `source_id` (e.g. "postid_commentid") and `source_type` = :comment.
-function _handle_comments(fetch_comments, idx, kw, rows)
-	if fetch_comments
-		for c in idx.comments()
-			c.contents === nothing && continue
-			push!(rows, (
-				source_id   = c.id,
-				doc_id      = idx.id,
-				keyword     = kw,
-				source_type = :comment,
-				text        = c.contents,
-				author      = c.author,
-				timestamp   = c.time,
-				view_count  = 0,
-				voteup      = 0,
-			))
-		end
-	end
-	return rows
 end
 
 _title_row(idx, kw) = (
@@ -287,8 +277,8 @@ function collect(Dcinside::Module, api, board_id, keywords;
 			push!(rows, _title_row(idx, kw))
 			idx.id in seen_ids && continue
 			push!(seen_ids, idx.id)
-			rows = _handle_document(fetch_fulltext, idx, kw, rows)
-			rows = _handle_comments(fetch_comments, idx, kw, rows)
+			_handle_document(fetch_fulltext, idx, kw, rows)
+			_handle_comments(fetch_comments, idx, kw, rows)
 		end
 	end
 	DataFrame(rows)
