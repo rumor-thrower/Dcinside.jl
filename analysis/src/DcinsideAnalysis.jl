@@ -23,9 +23,10 @@ module DcinsideAnalysis
 include("Kiwi.jl")
 include("Corpus.jl")
 include("DcinsideDataFrames.jl")
+include("NameDict.jl")
 
-using .Kiwi, .Corpus, .DcinsideDataFrames
+using .Kiwi, .Corpus, .DcinsideDataFrames, .NameDict
 
-export Kiwi, Corpus, DcinsideDataFrames
+export Kiwi, Corpus, DcinsideDataFrames, NameDict
 
 end # module DcinsideAnalysis
