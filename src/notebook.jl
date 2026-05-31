@@ -227,8 +227,8 @@ end
 
 function _handle_comments(fetch_comments, idx, kw, rows)
 	fetch_comments || return
-	for c in idx.comments()
-		c.contents === nothing && continue
+	comments = Iterators.filter(c -> c.contents !== nothing, idx.comments())
+	for c in comments
 		push!(rows, (
 			source_id   = c.id,
 			doc_id      = idx.id,
