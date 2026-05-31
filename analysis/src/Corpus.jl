@@ -80,8 +80,8 @@ function collect(api, board_id, keywords;
     seen_ids = Set{String}()
     for kw in keywords
         for idx in Dcinside.search_board(api, board_id, kw; num=posts_per_keyword)
-            push!(rows, _title_row(idx, kw))
             idx.id in seen_ids && continue
+            push!(rows, _title_row(idx, kw))
             push!(seen_ids, idx.id)
             _handle_document!(fetch_fulltext, idx, kw, rows)
             _handle_comments!(fetch_comments, idx, kw, rows)
