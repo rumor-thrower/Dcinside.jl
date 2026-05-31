@@ -205,19 +205,33 @@ module Corpus
 
 using DataFrames
 
+_doc_row(doc, idx, kw) = (
+	source_id   = idx.id * "_body",
+	doc_id      = idx.id,
+	keyword     = kw,
+	source_type = :post_body,
+	text        = doc.contents,
+	author      = idx.author,
+	timestamp   = idx.time,
+	view_count  = idx.view_count,
+	voteup      = idx.voteup_count,
+)
+
+_comment_row(c, idx, kw) = (
+	source_id   = c.id,
+	doc_id      = idx.id,
+	keyword     = kw,
+	source_type = :comment,
+	text        = c.contents,
+	author      = c.author,
+	timestamp   = c.time,
+	view_count  = 0,
+	voteup      = 0,
+)
+
 function _update_rows_with_doc(doc, idx, kw, rows)
 	(isnothing(doc) || isempty(doc.contents)) && return
-	push!(rows, (
-		source_id   = idx.id * "_body",
-		doc_id      = idx.id,
-		keyword     = kw,
-		source_type = :post_body,
-		text        = doc.contents,
-		author      = idx.author,
-		timestamp   = idx.time,
-		view_count  = idx.view_count,
-		voteup      = idx.voteup_count,
-	))
+	push!(rows, _doc_row(doc, idx, kw))
 end
 
 function _handle_document(fetch_fulltext, idx, kw, rows)
@@ -229,17 +243,7 @@ function _handle_comments(fetch_comments, idx, kw, rows)
 	fetch_comments || return
 	comments = Iterators.filter(c -> c.contents !== nothing, idx.comments())
 	for c in comments
-		push!(rows, (
-			source_id   = c.id,
-			doc_id      = idx.id,
-			keyword     = kw,
-			source_type = :comment,
-			text        = c.contents,
-			author      = c.author,
-			timestamp   = c.time,
-			view_count  = 0,
-			voteup      = 0,
-		))
+		push!(rows, _comment_row(c, idx, kw))
 	end
 end
 
