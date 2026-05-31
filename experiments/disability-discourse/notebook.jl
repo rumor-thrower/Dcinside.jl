@@ -19,135 +19,25 @@ end
 # ╔═╡ a1f3c2d0-0001-4000-8000-000000000001
 begin
     import Pkg
-    Pkg.activate(@__DIR__)  # src/Project.toml — 노트북 전용 환경
-    Pkg.instantiate()
-end
+    Pkg.activate(joinpath(@__DIR__, ".."))   # experiments/ 공유 환경
 
-# ╔═╡ d32c25d4-960c-475d-8c55-5daa238e2a8c
-module Kiwi
-
-using PyCall
-
-# Kiwi 인스턴스 참조 (싱글톤 패턴)
-const _instance = Ref{Union{PyObject,Nothing}}(nothing)
-
-"""
-    instance() -> PyObject
-
-kiwipiepy.Kiwi 싱글톤 인스턴스 반환 (첫 호출 시 초기화).
-"""
-function instance()
-    if isnothing(_instance[])
-        _instance[] = pyimport("kiwipiepy").Kiwi()
+    # 로컬 패키지(Dcinside, DcinsideAnalysis)를 dev 모드로 설치 (최초 1회).
+    let root = normpath(joinpath(@__DIR__, "..", "..")),
+        have = keys(Pkg.project().dependencies),
+        want = [("Dcinside", root),
+                ("DcinsideAnalysis", joinpath(root, "analysis"))],
+        miss = [Pkg.PackageSpec(path = p) for (n, p) in want if !(n in have)]
+        isempty(miss) || Pkg.develop(miss)
     end
-    _instance[]
-end
-
-"""
-    tokenize(text) -> PyObject (list of Token)
-
-형태소 분석 결과 토큰 목록.
-각 토큰: `.form` (형태), `.tag` (품사), `.start`, `.len`
-"""
-tokenize(text::AbstractString) = instance().tokenize(text)
-
-"""
-    morphemes(text) -> Dict{String,String}
-
-`form => tag` 사전으로 반환 (`형태소_분석기_팩토리` 동일).
-"""
-morphemes(text::AbstractString) =
-    Dict(string(t.form) => string(t.tag) for t in tokenize(text))
-
-"""
-    nouns(text) -> Vector{String}
-
-명사류(NNG · NNP)만 추출해 형태 목록으로 반환.
-"""
-nouns(text::AbstractString) =
-    [string(t.form) for t in tokenize(text) if string(t.tag) in ("NNG", "NNP")]
-
-# 사전별 마지막 로드 시각 (mtime 기반 재로드 방지)
-const _dict_mtime = Dict{String,Float64}()
-
-"""
-    load_user_dict!(path) -> Int
-
-외부 `.dict` 파일을 Kiwi 인스턴스에 로드한다.
-형식: 탭 구분 `단어\t품사` (한 줄에 하나).
-파일이 수정되지 않았으면 재로드를 생략한다 (`kiwi_parser.jl` 동일 패턴).
-반환: 새로 추가된 단어 수 (생략 시 0).
-"""
-function load_user_dict!(path::AbstractString)::Int
-    ispath(path) || return 0
-    mt = mtime(path)
-    mt == get(_dict_mtime, path, typemin(Float64)) && return 0
-    _dict_mtime[path] = mt
-    n = instance().load_user_dictionary(path)
-    @info "Kiwi 사용자 사전 로드" path n
-    return n
-end
-
+    Pkg.instantiate()
 end
 
 # ╔═╡ c03b12c8-ea24-4e68-a89a-a616db2b4798
 begin
 	using PlutoUI
 	using DataFrames
-end
-
-# ╔═╡ d8b7dad9-867f-400d-87cc-e184d47f9880
-# Dcinside.jl 모듈을 격리된 래퍼 모듈에 include 한 뒤 추출하여 `Dcinside` 변수에 바인딩.
-# 이렇게 해야 `Dcinside` 가 Pluto 의존성 추적 대상이 되어, 이 셀이 항상 사용처보다
-# 먼저 실행된다. (그냥 `include` 하면 추적 불가; `Dcinside = include(...)` 는 include 가
-# 먼저 const Dcinside 를 정의해 "invalid assignment to constant" 에러 발생.)
-Dcinside = let
-	wrapper = Module(:DcinsideWrapper)
-	Core.eval(wrapper, :(include(p) = Base.include($wrapper, p)))
-	Core.eval(wrapper, :(include($(joinpath(@__DIR__, "Dcinside.jl")))))
-	# Julia 1.12 엄격한 world age: 방금 eval로 정의한 바인딩을 같은 world 에서
-	# 직접 읽으면 경고 → invokelatest 로 최신 world 에서 조회.
-	Base.invokelatest(getglobal, wrapper, :Dcinside)
-end
-
-# ╔═╡ a43c857b-3162-49fb-9163-b25e6c93d6d2
-module DcinsideDataFrames
-
-import DataFrames: DataFrame, transform!, ByRow
-
-# Function 필드(comments, document)를 제외한 열 이름 (타입 기반).
-# `Dcinside` 모듈은 인자로 전달받는다 — Pluto 워크스페이스 전역을 서브모듈에서
-# 직접 참조할 수 없으므로 호출부(to_dataframe)에서 넘겨준다.
-_idx_fnames(Dcinside::Module) = Tuple(
-    f for f in fieldnames(Dcinside.DocumentIndex)
-    if fieldtype(Dcinside.DocumentIndex, f) != Function
-)
-
-_to_row(Dcinside::Module, idx) =
-    (fns = _idx_fnames(Dcinside); NamedTuple{fns}(getfield(idx, f) for f in fns))
-
-_fix_types!(df::DataFrame) =
-    transform!(df, :id => ByRow(s -> parse(Int, s)) => :id)
-
-"""
-    to_dataframe(Dcinside, iter) -> DataFrame
-
-게시판 인덱스 이터러블을 받아 타입 보정된 `DataFrame` 으로 반환한다.
-- `id` 열: `String` → `Int`
-- `comments` / `document` Function 필드는 제외됨
-"""
-to_dataframe(Dcinside::Module, iter) =
-    _fix_types!(DataFrame([_to_row(Dcinside, idx) for idx in iter]))
-
-"""
-    parse_titles!(df, parse_fn) -> DataFrame
-
-`title` 열의 각 값에 `parse_fn` 을 적용하여 `:morphemes` 열을 추가한다.
-`parse_fn` 은 `String -> Any` 형태 (e.g. `Kiwi.morphemes`, `Kiwi.nouns`).
-"""
-parse_titles!(df::DataFrame, parse_fn::Function) =
-    transform!(df, :title => ByRow(parse_fn) => :morphemes)
-
+	using Dcinside
+	using DcinsideAnalysis   # Kiwi · Corpus · DcinsideDataFrames
 end
 
 # ╔═╡ d9be15e6-11d4-4e56-af91-99a60befe7ef
@@ -161,19 +51,21 @@ const gallery_name = "genrenovel"
 
 # ╔═╡ fa9b0c1e-3d72-4a85-b6e8-2f5c8d1e0a34
 let time
-	Kiwi.load_user_dict!(joinpath(@__DIR__, "user_dict.dict"))
+	# 공통 중립 어휘 + 이 실험 전용 어휘를 순서대로 로드
+	Kiwi.load_user_dict!(normpath(joinpath(@__DIR__, "..", "..", "analysis", "dict", "base.dict")))
+	Kiwi.load_user_dict!(joinpath(@__DIR__, "vocab.dict"))
 end
 
 # ╔═╡ 9c9e951d-b26f-4469-a34e-befce57a9338
 let ch = Dcinside.board(api, gallery_name; num=5)
-	df = DcinsideDataFrames.to_dataframe(Dcinside, ch)
+	df = DcinsideDataFrames.to_dataframe(ch)
 end
 
 # ╔═╡ c1a2b3d4-e5f6-7890-abcd-ef1234567890
 # title 열 → Kiwi 형태소 분석 (명사 추출) → id·title·morphemes 열만 출력
 let time
 	ch = Dcinside.board(api, gallery_name; num=10)
-	df = DcinsideDataFrames.to_dataframe(Dcinside, ch)
+	df = DcinsideDataFrames.to_dataframe(ch)
 	DcinsideDataFrames.parse_titles!(df, Kiwi.nouns)
 	df[!, [:id, :title, :morphemes]]
 end
@@ -196,105 +88,15 @@ begin
 	)
 
 	const KWIC_WINDOW = 40
-	const OUTPUT_DIR  = let d = joinpath(@__DIR__, "..", "output"); mkpath(d); d end
+	const OUTPUT_DIR  = let d = joinpath(@__DIR__, "output"); mkpath(d); d end
 	md"상수 정의 완료 — 키워드 $(length(DISABILITY_KEYWORDS))개, 프레임 $(length(FRAME_VOCAB))종 | 출력: $(OUTPUT_DIR)"
-end
-
-# ╔═╡ aa000014-1401-4000-8000-000000000014
-module Corpus
-
-using DataFrames
-
-_doc_row(doc, idx, kw) = (
-	source_id   = idx.id * "_body",
-	doc_id      = idx.id,
-	keyword     = kw,
-	source_type = :post_body,
-	text        = doc.contents,
-	author      = idx.author,
-	timestamp   = idx.time,
-	view_count  = idx.view_count,
-	voteup      = idx.voteup_count,
-)
-
-_comment_row(c, idx, kw) = (
-	source_id   = c.id,
-	doc_id      = idx.id,
-	keyword     = kw,
-	source_type = :comment,
-	text        = c.contents,
-	author      = c.author,
-	timestamp   = c.time,
-	view_count  = 0,
-	voteup      = 0,
-)
-
-function _update_rows_with_doc!(doc, idx, kw, rows)
-	(isnothing(doc) || isempty(doc.contents)) && return
-	push!(rows, _doc_row(doc, idx, kw))
-end
-
-function _handle_document!(fetch_fulltext, idx, kw, rows)
-	fetch_fulltext || return
-	_update_rows_with_doc!(idx.document(), idx, kw, rows)
-end
-
-function _handle_comments!(fetch_comments, idx, kw, rows)
-	fetch_comments || return
-	comments = Iterators.filter(c -> c.contents !== nothing, idx.comments())
-	for c in comments
-		push!(rows, _comment_row(c, idx, kw))
-	end
-end
-
-_title_row(idx, kw) = (
-	source_id   = idx.id,
-	doc_id      = idx.id,
-	keyword     = kw,
-	source_type = :post_title,
-	text        = idx.title,
-	author      = idx.author,
-	timestamp   = idx.time,
-	view_count  = idx.view_count,
-	voteup      = idx.voteup_count,
-)
-
-"""
-	collect_corpus(Dcinside, api, board_id, keywords; posts_per_keyword, fetch_fulltext, fetch_comments)
-	-> DataFrame
-
-각 키워드로 `search_board → document → comments` 순 수집.
-`Dcinside` 모듈은 인자로 전달받는다 (Pluto 워크스페이스 전역을 서브모듈에서
-직접 참조할 수 없으므로 — 호출부에서 넘겨준다).
-
-반환 열: `source_id`, `doc_id`, `keyword`, `source_type` (:post_title/:post_body/:comment),
-		 `text`, `author`, `timestamp`, `view_count`, `voteup`
-"""
-function collect(Dcinside::Module, api, board_id, keywords;
-						posts_per_keyword::Int=20,
-						fetch_fulltext::Bool=true,
-						fetch_comments::Bool=true)
-	rows     = NamedTuple[]
-	seen_ids = Set{String}()
-	for kw in keywords
-		for idx in Dcinside.search_board(api, board_id, kw; num=posts_per_keyword)
-			push!(rows, _title_row(idx, kw))
-			idx.id in seen_ids && continue
-			push!(seen_ids, idx.id)
-			_handle_document!(fetch_fulltext, idx, kw, rows)
-			_handle_comments!(fetch_comments, idx, kw, rows)
-		end
-	end
-	DataFrame(rows)
-end
-
 end
 
 # ╔═╡ aa000015-1501-4000-8000-000000000015
 # 키워드 8개 × 20게시글 × (본문+댓글 포함) ≈ 요청 ~500회 × 1.5s ≈ 12~15분
 corpus_df = let time
 	@info "코퍼스 수집 시작..."
-	df = Corpus.collect(Dcinside, api, gallery_name, DISABILITY_KEYWORDS; posts_per_keyword=20)
+	df = Corpus.collect(api, gallery_name, DISABILITY_KEYWORDS; posts_per_keyword=20)
 	@info "수집 완료" nrow=nrow(df)
 	df
 end
@@ -595,18 +397,14 @@ end
 
 # ╔═╡ Cell order:
 # ╟─a1f3c2d0-0001-4000-8000-000000000001
-# ╟─d8b7dad9-867f-400d-87cc-e184d47f9880
-# ╟─a43c857b-3162-49fb-9163-b25e6c93d6d2
-# ╟─d32c25d4-960c-475d-8c55-5daa238e2a8c
+# ╠═c03b12c8-ea24-4e68-a89a-a616db2b4798
 # ╟─d9be15e6-11d4-4e56-af91-99a60befe7ef
 # ╟─c708a4f0-2482-4d84-94f7-cc734cc1a5c0
-# ╠═c03b12c8-ea24-4e68-a89a-a616db2b4798
 # ╟─448bc7e4-5fff-4f16-9c28-7070f51083df
 # ╟─fa9b0c1e-3d72-4a85-b6e8-2f5c8d1e0a34
 # ╟─9c9e951d-b26f-4469-a34e-befce57a9338
 # ╟─c1a2b3d4-e5f6-7890-abcd-ef1234567890
 # ╟─aa000013-1301-4000-8000-000000000013
-# ╠═aa000014-1401-4000-8000-000000000014
 # ╟─aa000015-1501-4000-8000-000000000015
 # ╟─aa000016-1601-4000-8000-000000000016
 # ╟─aa000017-1701-4000-8000-000000000017
