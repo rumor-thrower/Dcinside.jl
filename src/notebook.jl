@@ -97,33 +97,47 @@ begin
 end
 
 # ╔═╡ d8b7dad9-867f-400d-87cc-e184d47f9880
-include("Dcinside.jl")
+# Dcinside.jl 모듈을 격리된 래퍼 모듈에 include 한 뒤 추출하여 `Dcinside` 변수에 바인딩.
+# 이렇게 해야 `Dcinside` 가 Pluto 의존성 추적 대상이 되어, 이 셀이 항상 사용처보다
+# 먼저 실행된다. (그냥 `include` 하면 추적 불가; `Dcinside = include(...)` 는 include 가
+# 먼저 const Dcinside 를 정의해 "invalid assignment to constant" 에러 발생.)
+Dcinside = let
+	wrapper = Module(:DcinsideWrapper)
+	Core.eval(wrapper, :(include(p) = Base.include($wrapper, p)))
+	Core.eval(wrapper, :(include($(joinpath(@__DIR__, "Dcinside.jl")))))
+	# Julia 1.12 엄격한 world age: 방금 eval로 정의한 바인딩을 같은 world 에서
+	# 직접 읽으면 경고 → invokelatest 로 최신 world 에서 조회.
+	Base.invokelatest(getglobal, wrapper, :Dcinside)
+end
 
 # ╔═╡ a43c857b-3162-49fb-9163-b25e6c93d6d2
 module DcinsideDataFrames
 
-import ..Dcinside
 import DataFrames: DataFrame, transform!, ByRow
 
-# Function 필드(comments, document)를 제외한 열 이름 (타입 기반, 1회 계산)
-const _idx_fnames = Tuple(
+# Function 필드(comments, document)를 제외한 열 이름 (타입 기반).
+# `Dcinside` 모듈은 인자로 전달받는다 — Pluto 워크스페이스 전역을 서브모듈에서
+# 직접 참조할 수 없으므로 호출부(to_dataframe)에서 넘겨준다.
+_idx_fnames(Dcinside::Module) = Tuple(
     f for f in fieldnames(Dcinside.DocumentIndex)
     if fieldtype(Dcinside.DocumentIndex, f) != Function
 )
 
-_to_row(idx) = NamedTuple{_idx_fnames}(getfield(idx, f) for f in _idx_fnames)
+_to_row(Dcinside::Module, idx) =
+    (fns = _idx_fnames(Dcinside); NamedTuple{fns}(getfield(idx, f) for f in fns))
 
 _fix_types!(df::DataFrame) =
     transform!(df, :id => ByRow(s -> parse(Int, s)) => :id)
 
 """
-    to_dataframe(iter) -> DataFrame
+    to_dataframe(Dcinside, iter) -> DataFrame
 
 게시판 인덱스 이터러블을 받아 타입 보정된 `DataFrame` 으로 반환한다.
 - `id` 열: `String` → `Int`
 - `comments` / `document` Function 필드는 제외됨
 """
-to_dataframe(iter) = _fix_types!(DataFrame([_to_row(idx) for idx in iter]))
+to_dataframe(Dcinside::Module, iter) =
+    _fix_types!(DataFrame([_to_row(Dcinside, idx) for idx in iter]))
 
 """
     parse_titles!(df, parse_fn) -> DataFrame
@@ -152,14 +166,14 @@ end
 
 # ╔═╡ 9c9e951d-b26f-4469-a34e-befce57a9338
 let ch = Dcinside.board(api, gallery_name; num=5)
-	df = DcinsideDataFrames.to_dataframe(ch)
+	df = DcinsideDataFrames.to_dataframe(Dcinside, ch)
 end
 
 # ╔═╡ c1a2b3d4-e5f6-7890-abcd-ef1234567890
 # title 열 → Kiwi 형태소 분석 (명사 추출) → id·title·morphemes 열만 출력
 let time
 	ch = Dcinside.board(api, gallery_name; num=10)
-	df = DcinsideDataFrames.to_dataframe(ch)
+	df = DcinsideDataFrames.to_dataframe(Dcinside, ch)
 	DcinsideDataFrames.parse_titles!(df, Kiwi.nouns)
 	df[!, [:id, :title, :morphemes]]
 end
@@ -187,80 +201,100 @@ begin
 end
 
 # ╔═╡ aa000014-1401-4000-8000-000000000014
+module Corpus
+
+using DataFrames
+
+_doc_row(doc, idx, kw) = (
+	source_id   = idx.id * "_body",
+	doc_id      = idx.id,
+	keyword     = kw,
+	source_type = :post_body,
+	text        = doc.contents,
+	author      = idx.author,
+	timestamp   = idx.time,
+	view_count  = idx.view_count,
+	voteup      = idx.voteup_count,
+)
+
+_comment_row(c, idx, kw) = (
+	source_id   = c.id,
+	doc_id      = idx.id,
+	keyword     = kw,
+	source_type = :comment,
+	text        = c.contents,
+	author      = c.author,
+	timestamp   = c.time,
+	view_count  = 0,
+	voteup      = 0,
+)
+
+function _update_rows_with_doc!(doc, idx, kw, rows)
+	(isnothing(doc) || isempty(doc.contents)) && return
+	push!(rows, _doc_row(doc, idx, kw))
+end
+
+function _handle_document!(fetch_fulltext, idx, kw, rows)
+	fetch_fulltext || return
+	_update_rows_with_doc!(idx.document(), idx, kw, rows)
+end
+
+function _handle_comments!(fetch_comments, idx, kw, rows)
+	fetch_comments || return
+	comments = Iterators.filter(c -> c.contents !== nothing, idx.comments())
+	for c in comments
+		push!(rows, _comment_row(c, idx, kw))
+	end
+end
+
+_title_row(idx, kw) = (
+	source_id   = idx.id,
+	doc_id      = idx.id,
+	keyword     = kw,
+	source_type = :post_title,
+	text        = idx.title,
+	author      = idx.author,
+	timestamp   = idx.time,
+	view_count  = idx.view_count,
+	voteup      = idx.voteup_count,
+)
+
 """
-    collect_corpus(api, board_id, keywords; posts_per_keyword, fetch_fulltext, fetch_comments)
-    -> DataFrame
+	collect_corpus(Dcinside, api, board_id, keywords; posts_per_keyword, fetch_fulltext, fetch_comments)
+	-> DataFrame
 
 각 키워드로 `search_board → document → comments` 순 수집.
+`Dcinside` 모듈은 인자로 전달받는다 (Pluto 워크스페이스 전역을 서브모듈에서
+직접 참조할 수 없으므로 — 호출부에서 넘겨준다).
 
 반환 열: `source_id`, `doc_id`, `keyword`, `source_type` (:post_title/:post_body/:comment),
-         `text`, `author`, `timestamp`, `view_count`, `voteup`
+		 `text`, `author`, `timestamp`, `view_count`, `voteup`
 """
-function collect_corpus(api, board_id, keywords;
-                        posts_per_keyword::Int=20,
-                        fetch_fulltext::Bool=true,
-                        fetch_comments::Bool=true)
+function collect(Dcinside::Module, api, board_id, keywords;
+						posts_per_keyword::Int=20,
+						fetch_fulltext::Bool=true,
+						fetch_comments::Bool=true)
 	rows     = NamedTuple[]
 	seen_ids = Set{String}()
 	for kw in keywords
 		for idx in Dcinside.search_board(api, board_id, kw; num=posts_per_keyword)
-			push!(rows, (
-				source_id   = idx.id,
-				doc_id      = idx.id,
-				keyword     = kw,
-				source_type = :post_title,
-				text        = idx.title,
-				author      = idx.author,
-				timestamp   = idx.time,
-				view_count  = idx.view_count,
-				voteup      = idx.voteup_count,
-			))
+			push!(rows, _title_row(idx, kw))
 			idx.id in seen_ids && continue
 			push!(seen_ids, idx.id)
-
-			if fetch_fulltext
-				doc = idx.document()
-				if doc !== nothing && !isempty(doc.contents)
-					push!(rows, (
-						source_id   = idx.id * "_body",
-						doc_id      = idx.id,
-						keyword     = kw,
-						source_type = :post_body,
-						text        = doc.contents,
-						author      = idx.author,
-						timestamp   = idx.time,
-						view_count  = idx.view_count,
-						voteup      = idx.voteup_count,
-					))
-				end
-			end
-
-			if fetch_comments
-				for c in idx.comments()
-					c.contents === nothing && continue
-					push!(rows, (
-						source_id   = c.id,
-						doc_id      = idx.id,
-						keyword     = kw,
-						source_type = :comment,
-						text        = c.contents,
-						author      = c.author,
-						timestamp   = c.time,
-						view_count  = 0,
-						voteup      = 0,
-					))
-				end
-			end
+			_handle_document!(fetch_fulltext, idx, kw, rows)
+			_handle_comments!(fetch_comments, idx, kw, rows)
 		end
 	end
 	DataFrame(rows)
+end
+
 end
 
 # ╔═╡ aa000015-1501-4000-8000-000000000015
 # 키워드 8개 × 20게시글 × (본문+댓글 포함) ≈ 요청 ~500회 × 1.5s ≈ 12~15분
 corpus_df = let time
 	@info "코퍼스 수집 시작..."
-	df = collect_corpus(api, gallery_name, DISABILITY_KEYWORDS; posts_per_keyword=20)
+	df = Corpus.collect(Dcinside, api, gallery_name, DISABILITY_KEYWORDS; posts_per_keyword=20)
 	@info "수집 완료" nrow=nrow(df)
 	df
 end
@@ -275,16 +309,19 @@ begin
 		length(winners) == 1 ? only(winners) : :ambiguous
 	end
 
+	# 동음이의 용례 제거: 각 (키워드, 패턴) 쌍에 대해 키워드 행 중 패턴 불일치 행을 제거
+	filter_keyword_sense!(df, kw_patterns) =
+		(foreach(((kw, pat),) -> filter!(r -> r.keyword != kw || occursin(pat, r.text), df), kw_patterns); df)
+
 	corpus_nlp = let
 		df = copy(corpus_df)
 		# 플랫폼 공식 봇 계정 제거
 		filter!(r -> r.author != "댓글돌이", df)
-		# "불구하고/하여/하다" = "despite"(역접) 용례 제거 — 장애 의미의 "불구"만 유지
-		filter!(r -> r.keyword != "불구" || occursin(r"불구(?!하)", r.text), df)
-		# "실명제" = 實名制(금융 실명제) 용례 제거 — 失明(시력 상실) 의미의 "실명"만 유지
-		filter!(r -> r.keyword != "실명" || occursin(r"실명(?!제)", r.text), df)
-		# "활자폐기물" 등 활자+폐기물 합성어 내 "자폐" 제거 — 自閉(자폐증) 의미만 유지
-		filter!(r -> r.keyword != "자폐" || occursin(r"(?<!활)자폐", r.text), df)
+		filter_keyword_sense!(df, [
+			("불구", r"불구(?!하)"),   # "불구하고/하여/하다"(역접) 제거 — 장애 의미만 유지
+			("실명", r"실명(?!제)"),   # "실명제"(금융 실명제) 제거 — 失明(시력 상실)만 유지
+			("자폐", r"(?<!활)자폐"), # "활자폐기물" 등 합성어 제거 — 自閉(자폐증)만 유지
+		])
 		transform!(df, :text => ByRow(t -> Kiwi.nouns(t))                      => :nouns)
 		transform!(df, :text => ByRow(t -> classify_frame(t, FRAME_VOCAB))     => :frame)
 		df
@@ -569,7 +606,7 @@ end
 # ╟─9c9e951d-b26f-4469-a34e-befce57a9338
 # ╟─c1a2b3d4-e5f6-7890-abcd-ef1234567890
 # ╟─aa000013-1301-4000-8000-000000000013
-# ╟─aa000014-1401-4000-8000-000000000014
+# ╠═aa000014-1401-4000-8000-000000000014
 # ╟─aa000015-1501-4000-8000-000000000015
 # ╟─aa000016-1601-4000-8000-000000000016
 # ╟─aa000017-1701-4000-8000-000000000017
