@@ -45,9 +45,14 @@ end
 
 function _handle_comments!(fetch_comments, idx, kw, rows)
     fetch_comments || return
-    comments = Iterators.filter(c -> c.contents !== nothing, idx.comments())
-    for c in comments
-        push!(rows, _comment_row(c, idx, kw))
+    ch = idx.comments()
+    try
+        for c in ch
+            c.contents === nothing && continue
+            push!(rows, _comment_row(c, idx, kw))
+        end
+    finally
+        close(ch)
     end
 end
 
