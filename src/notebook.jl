@@ -253,6 +253,18 @@ function _handle_comments(fetch_comments, idx, kw, rows)
 	return rows
 end
 
+_title_row(idx, kw) = (
+	source_id   = idx.id,
+	doc_id      = idx.id,
+	keyword     = kw,
+	source_type = :post_title,
+	text        = idx.title,
+	author      = idx.author,
+	timestamp   = idx.time,
+	view_count  = idx.view_count,
+	voteup      = idx.voteup_count,
+)
+
 """
 	collect_corpus(Dcinside, api, board_id, keywords; posts_per_keyword, fetch_fulltext, fetch_comments)
 	-> DataFrame
@@ -272,24 +284,10 @@ function collect(Dcinside::Module, api, board_id, keywords;
 	seen_ids = Set{String}()
 	for kw in keywords
 		for idx in Dcinside.search_board(api, board_id, kw; num=posts_per_keyword)
-			push!(rows, (
-				source_id   = idx.id,
-				doc_id      = idx.id,
-				keyword     = kw,
-				source_type = :post_title,
-				text        = idx.title,
-				author      = idx.author,
-				timestamp   = idx.time,
-				view_count  = idx.view_count,
-				voteup      = idx.voteup_count,
-			))
+			push!(rows, _title_row(idx, kw))
 			idx.id in seen_ids && continue
 			push!(seen_ids, idx.id)
-
-			# How to refactor if block not in start of function? — early continue + guard clause pattern
 			rows = _handle_document(fetch_fulltext, idx, kw, rows)
-
-			# name of the function to replace if blocks: handle_comments
 			rows = _handle_comments(fetch_comments, idx, kw, rows)
 		end
 	end
