@@ -9,6 +9,15 @@ HTTP API client for the DCinside gallery — read/write galleries, posts, and co
 - Write, modify, and remove posts and comments
 - Lexbor-based HTML parsing into typed structures (`Document`, `Comment`, `Image`, ...)
 
+## Installation
+
+Not registered in the General registry. Install from the Git URL:
+
+```julia
+using Pkg
+Pkg.add(url = "https://github.com/rumor-thrower/Dcinside.jl")
+```
+
 ## Usage
 
 ```julia
