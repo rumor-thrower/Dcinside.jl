@@ -50,10 +50,10 @@ function barchart(labels, vals;
     color_at(i) = colors isa AbstractString ? colors : colors[i]
 
     # 폭 산출: 고정 width 우선, 없으면 bar_w 기준, 둘 다 없으면 기본 bar_w 추정
-    bw = bar_w === nothing ?
-         (width === nothing ? 28 : (width - 80) ÷ n) :
+    bw = isnothing(bar_w) ?
+         (isnothing(width) ? 28 : (width - 80) ÷ n) :
          bar_w
-    W  = width === nothing ? 80 + (bw + gap) * n : width
+    W  = isnothing(width) ? 80 + (bw + gap) * n : width
     step = bw + gap
 
     rects = IOBuffer()
@@ -96,9 +96,9 @@ function barchart(labels, vals;
           "style=\"font-family:sans-serif;overflow:visible\">\n" *
           legend_svg * "\n" * String(take!(rects)) * "</svg>"
 
-    outfile === nothing || write(outfile, svg)
+    isnothing(outfile) || write(outfile, svg)
 
-    head = title === nothing ? "" :
+    head = isnothing(title) ? "" :
         "<h4 style=\"font-family:sans-serif;margin:8px 0\">$(_svg_text(title))</h4>"
     HTML("<div>$head$svg</div>")
 end
