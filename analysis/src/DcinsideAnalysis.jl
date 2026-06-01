@@ -8,6 +8,7 @@ genrenovel 갤러리 텍스트 분석용 재사용 레이어.
 - [`Kiwi`](@ref)               — kiwipiepy 형태소 분석기 래퍼 (PyCall)
 - [`Corpus`](@ref)             — 키워드 기반 코퍼스 수집 (search_board → document → comments)
 - [`DcinsideDataFrames`](@ref) — DocumentIndex 이터러블 → DataFrame 변환
+- [`Charts`](@ref)             — 실험 노트북 공통 SVG 막대 차트 렌더러
 
 # 사용 예
 ```julia
@@ -24,9 +25,10 @@ include("Kiwi.jl")
 include("Corpus.jl")
 include("DcinsideDataFrames.jl")
 include("NameDict.jl")
+include("Charts.jl")
 
-using .Kiwi, .Corpus, .DcinsideDataFrames, .NameDict
+using .Kiwi, .Corpus, .DcinsideDataFrames, .NameDict, .Charts
 
-export Kiwi, Corpus, DcinsideDataFrames, NameDict
+export Kiwi, Corpus, DcinsideDataFrames, NameDict, Charts
 
 end # module DcinsideAnalysis
