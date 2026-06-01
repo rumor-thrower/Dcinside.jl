@@ -80,11 +80,7 @@ function url_quote(s::AbstractString)
     for c in s
         cp = codepoint(c)
         t  = uppercase(string(cp; base=16))
-        if length(t) >= 4
-            print(buf, "%u", t)
-        else
-            print(buf, "%", t)
-        end
+        print(buf, ifelse(length(t) >= 4, "%u", "%"), t)
     end
     String(take!(buf))
 end
