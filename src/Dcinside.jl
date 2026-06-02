@@ -80,11 +80,7 @@ function url_quote(s::AbstractString)
     for c in s
         cp = codepoint(c)
         t  = uppercase(string(cp; base=16))
-        if length(t) >= 4
-            print(buf, "%u", t)
-        else
-            print(buf, "%", t)
-        end
+        print(buf, ifelse(length(t) >= 4, "%u", "%"), t)
     end
     String(take!(buf))
 end
@@ -149,6 +145,7 @@ struct DocumentIndex
     has_image      ::Bool
     image_available::Bool
     author         ::String
+    author_id      ::Union{String,Nothing}
     time           ::DateTime
     view_count     ::Int
     comment_count  ::Int
@@ -523,11 +520,14 @@ function board(api::API, board_id::AbstractString;
 
                 # 작성자: data-nick + data-uid/data-ip
                 writer_td = _query1(tr, "td.gall_writer")
-                author = ""
+                author    = ""
+                author_id = nothing
                 if writer_td !== nothing
                     nick = something(_attr(writer_td, "data-nick"), "")
                     ip   = something(_attr(writer_td, "data-ip"),   "")
-                    author = isempty(ip) ? nick : "$nick($ip)"
+                    uid  = something(_attr(writer_td, "data-uid"),  "")
+                    author    = isempty(ip) ? nick : "$nick($ip)"
+                    author_id = isempty(uid) ? nothing : uid
                 end
 
                 # 날짜: td.gall_date[title] 에 전체 날짜 있음
@@ -558,7 +558,7 @@ function board(api::API, board_id::AbstractString;
 
                 idx = DocumentIndex(
                     document_id, board_id, title, has_image, image_available,
-                    author, post_time, view_count, comment_count, voteup_count, subject,
+                    author, author_id, post_time, view_count, comment_count, voteup_count, subject,
                     () -> document(api, board_id, document_id),
                     () -> comments(api, board_id, document_id),
                 )
@@ -647,11 +647,14 @@ function search_board(api::API, board_id::AbstractString, keyword::AbstractStrin
                 image_available = has_image
 
                 writer_td = _query1(tr, "td.gall_writer")
-                author = ""
+                author    = ""
+                author_id = nothing
                 if writer_td !== nothing
                     nick = something(_attr(writer_td, "data-nick"), "")
                     ip   = something(_attr(writer_td, "data-ip"),   "")
-                    author = isempty(ip) ? nick : "$nick($ip)"
+                    uid  = something(_attr(writer_td, "data-uid"),  "")
+                    author    = isempty(ip) ? nick : "$nick($ip)"
+                    author_id = isempty(uid) ? nothing : uid
                 end
 
                 date_td  = _query1(tr, "td.gall_date")
@@ -678,7 +681,7 @@ function search_board(api::API, board_id::AbstractString, keyword::AbstractStrin
 
                 idx = DocumentIndex(
                     document_id, board_id, title, has_image, image_available,
-                    author, post_time, view_count, comment_count, voteup_count, subject,
+                    author, author_id, post_time, view_count, comment_count, voteup_count, subject,
                     () -> document(api, board_id, document_id),
                     () -> comments(api, board_id, document_id),
                 )
