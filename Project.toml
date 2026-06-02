@@ -1,6 +1,6 @@
 name = "Dcinside"
 uuid = "1576e1e2-65c0-4245-85a5-03277280f392"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["rumor-thrower <87070008+rumor-thrower@users.noreply.github.com>"]
 
 [deps]
